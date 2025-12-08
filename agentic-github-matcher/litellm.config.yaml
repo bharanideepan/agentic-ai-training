@@ -1,0 +1,48 @@
+# ==============================================
+# LiteLLM Configuration - Model Gateway
+# ==============================================
+# This file configures LiteLLM to route all LLM requests
+# through OpenAI GPT-4o model.
+
+model_list:
+  # Primary Model - GPT-4o for all agent tasks
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+      temperature: 0.7
+      max_tokens: 4096
+    model_info:
+      description: "GPT-4o - Primary model for all agentic tasks"
+      
+  # Fallback Model - GPT-4o-mini for lighter tasks
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+      temperature: 0.7
+      max_tokens: 2048
+    model_info:
+      description: "GPT-4o-mini - Lightweight fallback model"
+
+# Router Settings
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 3
+  timeout: 60
+  retry_after: 5
+  fallbacks:
+    - gpt-4o: ["gpt-4o-mini"]
+
+# General Settings
+general_settings:
+  master_key: null
+  database_url: null
+  
+# Logging Configuration
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  success_callback: []
+  failure_callback: []
+

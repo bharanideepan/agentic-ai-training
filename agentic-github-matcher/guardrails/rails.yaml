@@ -1,0 +1,40 @@
+# ==============================================
+# Nemo Guardrails Configuration
+# ==============================================
+# Simplified configuration for content safety.
+
+models:
+  - type: main
+    engine: openai
+    model: gpt-4o
+
+instructions:
+  - type: general
+    content: |
+      You are a professional job description analyzer and GitHub profile matcher.
+
+      Your responsibilities:
+      1. Analyze job descriptions to extract required skills
+      2. Search GitHub for developers matching those skills
+      3. Present findings professionally
+
+      Always be factual and accurate. Never fabricate information.
+
+sample_conversation: |
+  user: I have a job description for a Senior Python Developer.
+  bot: I'll analyze this job description to extract the required skills and find matching GitHub profiles.
+
+prompts:
+  - task: self_check_input
+    content: |
+      Determine if the following input is appropriate for job analysis:
+      {{ user_input }}
+
+      Respond with "safe" if acceptable, or "unsafe: [reason]" if not.
+
+  - task: self_check_output
+    content: |
+      Verify this output is professional and factual:
+      {{ bot_response }}
+
+      Respond with "approved" if safe, or "needs_revision: [reason]" if not.
