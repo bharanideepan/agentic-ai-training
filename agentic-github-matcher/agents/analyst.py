@@ -14,6 +14,7 @@ analysis of job description text.
 """
 
 import json
+import os
 from typing import Optional
 from dataclasses import dataclass, field
 
@@ -151,16 +152,28 @@ class AnalystAgent:
         self.name = name
         
         # Configure LiteLLM settings
+        # Get API key from environment
+        api_key = os.getenv("OPENAI_API_KEY", "")
         self.llm_config = {
             "config_list": [
                 {
                     "model": model,
                     "api_type": "openai",
+                    "api_key": api_key,  # Explicitly pass API key
                     "temperature": temperature,
                 }
             ],
             "timeout": 120,
         }
+        
+        # Log API key status (without exposing the key)
+        if api_key:
+            if api_key.startswith("sk-"):
+                print(f"  [AnalystAgent] ✓ API key format valid (starts with 'sk-')")
+            else:
+                print(f"  [AnalystAgent] ⚠ API key format unusual (doesn't start with 'sk-'): {api_key[:10]}...")
+        else:
+            print(f"  [AnalystAgent] ⚠ No API key found in environment")
         
         # Create the AutoGen agent
         self.agent = ConversableAgent(
@@ -193,6 +206,7 @@ Return your analysis as a JSON object."""
 
         # Call LiteLLM directly for more control
         try:
+            print(f"  [AnalystAgent] Calling LLM with model: {self.model}")
             response = litellm.completion(
                 model=self.model,
                 messages=[
@@ -203,9 +217,12 @@ Return your analysis as a JSON object."""
                 response_format={"type": "json_object"}
             )
             
+            print(f"  [AnalystAgent] LLM response received")
             # Parse the response
             content = response.choices[0].message.content
+            print(f"  [AnalystAgent] Parsing JSON response...")
             data = json.loads(content)
+            print(f"  [AnalystAgent] Successfully extracted: {len(data.get('skills', []))} skills")
             
             # Create JobAnalysis object
             return JobAnalysis(
@@ -224,11 +241,14 @@ Return your analysis as a JSON object."""
             )
             
         except json.JSONDecodeError as e:
-            print(f"Error parsing JSON response: {e}")
+            print(f"  [AnalystAgent] ❌ Error parsing JSON response: {e}")
+            print(f"  [AnalystAgent] Response content: {content[:200] if 'content' in locals() else 'N/A'}")
             # Return empty analysis on error
             return JobAnalysis(summary=f"Error analyzing job description: {e}")
         except Exception as e:
-            print(f"Error during analysis: {e}")
+            import traceback
+            print(f"  [AnalystAgent] ❌ Error during analysis: {e}")
+            print(f"  [AnalystAgent] Traceback: {traceback.format_exc()}")
             return JobAnalysis(summary=f"Error analyzing job description: {e}")
     
     async def analyze_async(self, job_description: str) -> JobAnalysis:

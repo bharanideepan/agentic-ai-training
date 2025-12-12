@@ -12,6 +12,7 @@ recruitment and hiring purposes.
 """
 
 import json
+import os
 from typing import Optional
 from dataclasses import dataclass
 from datetime import datetime
@@ -94,16 +95,28 @@ class FormatterAgent:
         self.console = Console()
         
         # Configure LiteLLM settings
+        # Get API key from environment
+        api_key = os.getenv("OPENAI_API_KEY", "")
         self.llm_config = {
             "config_list": [
                 {
                     "model": model,
                     "api_type": "openai",
+                    "api_key": api_key,  # Explicitly pass API key
                     "temperature": temperature,
                 }
             ],
             "timeout": 120,
         }
+        
+        # Log API key status
+        if api_key:
+            if api_key.startswith("sk-"):
+                print(f"  [FormatterAgent] ✓ API key format valid")
+            else:
+                print(f"  [FormatterAgent] ⚠ API key format unusual: {api_key[:10]}...")
+        else:
+            print(f"  [FormatterAgent] ⚠ No API key found")
         
         # Create the AutoGen agent
         self.agent = ConversableAgent(

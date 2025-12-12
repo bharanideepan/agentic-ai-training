@@ -284,19 +284,35 @@ class AgenticWorkflow:
         # Initialize agents
         console.print("\n[bold]Initializing Agents...[/bold]")
         
+        # Check API key format
+        api_key = os.getenv("OPENAI_API_KEY", "")
+        if api_key:
+            if not api_key.startswith("sk-"):
+                console.print(f"[yellow]⚠ Warning: OpenAI API key doesn't start with 'sk-'. Current format: {api_key[:10]}...[/yellow]")
+            else:
+                console.print(f"[green]✓[/green] OpenAI API key format looks valid")
+        else:
+            console.print(f"[red]✗[/red] OPENAI_API_KEY not set!")
+        
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             console=console
         ) as progress:
             task = progress.add_task("Loading AnalystAgent...", total=3)
+            console.print(f"  [dim]Creating AnalystAgent with model: {model}[/dim]")
             self.analyst = create_analyst_agent(model=model, temperature=0.3)
+            console.print(f"  [green]✓[/green] AnalystAgent initialized")
             progress.update(task, advance=1, description="Loading GitHubSearchAgent...")
             
+            console.print(f"  [dim]Creating GitHubSearchAgent with model: {model}[/dim]")
             self.github_agent = create_github_agent(model=model, temperature=0.5)
+            console.print(f"  [green]✓[/green] GitHubSearchAgent initialized")
             progress.update(task, advance=1, description="Loading FormatterAgent...")
             
+            console.print(f"  [dim]Creating FormatterAgent with model: {model}[/dim]")
             self.formatter = create_formatter_agent(model=model, temperature=0.3)
+            console.print(f"  [green]✓[/green] FormatterAgent initialized")
             progress.update(task, advance=1, description="All agents ready!")
         
         console.print("[green]✓[/green] All agents initialized successfully\n")
@@ -335,14 +351,23 @@ class AgenticWorkflow:
             console=console
         ) as progress:
             task = progress.add_task("Extracting skills and requirements...", total=None)
-            job_analysis = self.analyst.analyze(job_description)
-            progress.update(task, description="Analysis complete!")
+            try:
+                job_analysis = self.analyst.analyze(job_description)
+                progress.update(task, description="Analysis complete!")
+            except Exception as e:
+                console.print(f"  [red]❌ Analysis failed: {e}[/red]")
+                raise
         
         # Display extracted skills
         searchable_skills = job_analysis.get_searchable_skills()
         console.print(f"  [green]✓[/green] Found {len(searchable_skills)} key skills")
         if searchable_skills:
             console.print(f"  [dim]Skills: {', '.join(searchable_skills[:8])}[/dim]")
+        
+        # Check if analysis was successful
+        if not searchable_skills:
+            console.print(f"  [yellow]⚠ Warning: No skills extracted from job description[/yellow]")
+            console.print(f"  [yellow]⚠ This might indicate an API key or LLM issue[/yellow]")
         
         # Step 2: Search GitHub
         console.print("\n[bold cyan]Step 2/3:[/bold cyan] Searching GitHub...")

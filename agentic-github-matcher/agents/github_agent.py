@@ -12,6 +12,7 @@ and finds candidates matching the job requirements.
 """
 
 import json
+import os
 from typing import Callable, Any
 from dataclasses import dataclass, field
 
@@ -21,7 +22,7 @@ from autogen import ConversableAgent, AssistantAgent
 # LiteLLM for model gateway
 import litellm
 
-# Import GitHub tools
+# Import GitHub tools (direct REST API only - MCP disabled)
 from tools.github_search import (
     search_repositories_by_skills,
     fetch_user_profile,
@@ -98,11 +99,13 @@ Your role is to:
 2. Search GitHub for relevant repositories and developers
 3. Compile a list of potential candidates who match the requirements
 
-You have access to the following tools:
+You have access to the following tools (via direct GitHub REST API):
 - search_repositories_by_skills: Search for repositories matching skills
 - search_users_by_skills: Search for developers matching skills
 - fetch_user_profile: Get detailed profile for a GitHub user
 - fetch_user_repos: Get repositories for a specific user
+
+Note: These tools use the GitHub REST API directly for reliable GitHub API access.
 
 WORKFLOW:
 1. First, search for repositories matching the key skills
@@ -148,6 +151,7 @@ class GitHubSearchAgent:
         self.name = name
         
         # Tool functions available to this agent
+        # Using direct REST API calls only
         self.tools = {
             "search_repositories_by_skills": search_repositories_by_skills,
             "search_users_by_skills": search_users_by_skills,
@@ -155,18 +159,32 @@ class GitHubSearchAgent:
             "fetch_user_repos": fetch_user_repos,
         }
         
+        print(f"  [GitHubSearchAgent] ✓ Using direct REST API for GitHub operations")
+        
         # Configure LiteLLM settings with tool definitions
+        # Get API key from environment
+        api_key = os.getenv("OPENAI_API_KEY", "")
         self.llm_config = {
             "config_list": [
                 {
                     "model": model,
                     "api_type": "openai",
+                    "api_key": api_key,  # Explicitly pass API key
                     "temperature": temperature,
                 }
             ],
             "timeout": 120,
             "tools": self._get_tool_definitions(),
         }
+        
+        # Log API key status
+        if api_key:
+            if api_key.startswith("sk-"):
+                print(f"  [GitHubSearchAgent] ✓ API key format valid")
+            else:
+                print(f"  [GitHubSearchAgent] ⚠ API key format unusual: {api_key[:10]}...")
+        else:
+            print(f"  [GitHubSearchAgent] ⚠ No API key found")
         
         # Create the AutoGen agent
         self.agent = ConversableAgent(
@@ -292,7 +310,8 @@ class GitHubSearchAgent:
         self, 
         skills: list[str], 
         job_analysis: dict = None,
-        max_candidates: int = 10
+        max_candidates: int = 10,
+        progress_callback: Callable[[str, float], None] = None
     ) -> SearchResults:
         """
         Search GitHub for developers and repositories matching the given skills.
@@ -315,7 +334,12 @@ class GitHubSearchAgent:
         results = SearchResults(query_skills=skills)
         
         # Step 1: Enhanced repository search with multiple strategies
-        print(f"  🔍 Searching repositories for skills: {skills[:5]}")
+        strategy_info = "via Direct REST API"
+        print(f"  [GitHubSearchAgent] Starting search with {len(skills)} skills")
+        print(f"  [GitHubSearchAgent] Strategy: {strategy_info}")
+        if progress_callback:
+            progress_callback(f"Searching GitHub repositories ({strategy_info})...", 35)
+        print(f"  🔍 Searching repositories for skills: {skills[:5]} ({strategy_info})")
         
         # Strategy 1: Search by languages
         language_skills = [s for s in skills if self._is_language(s)]
@@ -323,6 +347,9 @@ class GitHubSearchAgent:
             repo_results_lang = search_repositories_by_skills(language_skills, max_results=20)
             if repo_results_lang.get("success"):
                 results.repositories.extend(repo_results_lang.get("repositories", []))
+            else:
+                error_msg = repo_results_lang.get("error", "Unknown error")
+                print(f"  ⚠ Repository search failed: {error_msg}")
         
         # Strategy 2: Search by frameworks/tools (topic-based)
         framework_skills = [s for s in skills if not self._is_language(s)]
@@ -330,6 +357,9 @@ class GitHubSearchAgent:
             repo_results_fw = search_repositories_by_skills(framework_skills, max_results=20)
             if repo_results_fw.get("success"):
                 results.repositories.extend(repo_results_fw.get("repositories", []))
+            else:
+                error_msg = repo_results_fw.get("error", "Unknown error")
+                print(f"  ⚠ Repository search failed: {error_msg}")
         
         # Deduplicate repositories by full_name
         seen_repos = set()
@@ -356,27 +386,60 @@ class GitHubSearchAgent:
                 if not _is_organization_or_company(owner):
                     repo_owners.append(owner)
         
-        # Step 2: Enhanced user search
-        print(f"  🔍 Searching for developers...")
-        user_results = search_users_by_skills(skills, max_results=15)
+        # Step 2: Enhanced user search with agentic behavior
+        if progress_callback:
+            progress_callback(f"Searching for developers ({strategy_info})...", 40)
+        print(f"  🔍 Searching for developers ({strategy_info})...")
         
+        # Use agentic behavior: search with multiple strategies to ensure we get enough candidates
+        # Key insight: Search by individual skills, not all skills together
+        # This ensures we find candidates even if they don't have ALL skills
         user_candidates = []
-        if user_results.get("success"):
-            results.total_developers_found = user_results.get("total_count", 0)
-            user_candidates = [u.get("username") for u in user_results.get("users", [])]
+        seen_candidates = set()
+        
+        # Strategy 1: Search by individual skills (more flexible than searching all at once)
+        # Optimized: Only fetch max_candidates to reduce API calls
+        for skill in skills[:5]:  # Try top 5 skills individually
+            if len(user_candidates) >= max_candidates:
+                break
+            skill_results = search_users_by_skills([skill], max_results=max_candidates)
+            if skill_results.get("success"):
+                new_candidates = [u.get("username") for u in skill_results.get("users", [])]
+                for candidate in new_candidates:
+                    if candidate not in seen_candidates and len(user_candidates) < max_candidates:
+                        user_candidates.append(candidate)
+                        seen_candidates.add(candidate)
+        
+        # Strategy 2: Also search by primary skills combination (for exact matches)
+        if len(user_candidates) < max_candidates and len(skills) >= 2:
+            primary_skills = skills[:3] if len(skills) >= 3 else skills
+            user_results = search_users_by_skills(primary_skills, max_results=max_candidates)
+            if user_results.get("success"):
+                results.total_developers_found = user_results.get("total_count", 0)
+                for candidate in [u.get("username") for u in user_results.get("users", [])]:
+                    if candidate not in seen_candidates and len(user_candidates) < max_candidates:
+                        user_candidates.append(candidate)
+                        seen_candidates.add(candidate)
         
         # Combine and prioritize candidates (repo owners first, then direct search)
         all_candidates = repo_owners + [u for u in user_candidates if u not in repo_owners]
-        all_candidates = all_candidates[:max_candidates * 2]  # Fetch more for better scoring
+        # Only fetch max_candidates to optimize speed
+        all_candidates = all_candidates[:max_candidates]
         
         # Step 3: Fetch detailed profiles and calculate enhanced scores
+        if progress_callback:
+            progress_callback(f"Fetching profiles for {len(all_candidates)} candidates...", 45)
         print(f"  👤 Fetching profiles for {len(all_candidates)} candidates...")
         developers = []
         filtered_count = 0
         low_relevance_count = 0
         no_repos_count = 0
         
-        for username in all_candidates:
+        for idx, username in enumerate(all_candidates):
+            # Update progress during fetching (update for every candidate for better responsiveness)
+            if progress_callback:
+                progress = 45 + int((idx / max(len(all_candidates), 1)) * 10)
+                progress_callback(f"Fetching profile {idx + 1}/{len(all_candidates)}...", progress)
             if not username:
                 continue
                 
@@ -410,12 +473,20 @@ class GitHubSearchAgent:
             user_repos = fetch_user_repos(username, max_repos=10)
             top_repos = user_repos.get("repositories", []) if user_repos.get("success") else []
             
-            if not top_repos:
+            # Extract matching skills from repos
+            matching_skills = self._extract_matching_skills(top_repos, skills) if top_repos else []
+            
+            # Also check bio and profile for skill mentions (even if no repos)
+            bio = (profile.get("bio") or "").lower()
+            skills_lower = {s.lower(): s for s in skills}
+            for skill_lower, skill_orig in skills_lower.items():
+                if skill_lower in bio and skill_orig not in matching_skills:
+                    matching_skills.append(skill_orig)
+            
+            # If no matching skills found at all, skip this candidate
+            if not matching_skills:
                 no_repos_count += 1
                 continue
-            
-            # Extract matching skills first
-            matching_skills = self._extract_matching_skills(top_repos, skills)
             
             # Calculate skill match percentage
             skill_match_percentage = (len(matching_skills) / len(skills) * 100) if skills else 0.0
@@ -423,21 +494,9 @@ class GitHubSearchAgent:
             # Determine if this is an exact match (80%+ skill match)
             is_exact_match = skill_match_percentage >= 80.0
             
-            # Enhanced relevance scoring
-            relevance = self._calculate_enhanced_relevance(
-                profile, 
-                top_repos, 
-                skills,
-                job_analysis
-            )
-            
-            # Adaptive threshold: lower threshold for candidates with some skill matches
-            # If candidate has at least 1 matching skill, use lower threshold (10 instead of 15)
-            # This ensures we don't filter out candidates with partial matches
-            min_threshold = 10 if len(matching_skills) > 0 else 15
-            
-            # Include candidates that meet the threshold
-            if relevance >= min_threshold:
+            # Include ALL candidates with at least 1 matching skill
+            # We'll score them all in batch later for efficiency
+            if len(matching_skills) > 0:
                 developer = DeveloperMatch(
                     username=profile.get("username", ""),
                     name=profile.get("name", "") or profile.get("username", ""),
@@ -448,7 +507,7 @@ class GitHubSearchAgent:
                     public_repos=profile.get("public_repos", 0),
                     top_repositories=top_repos[:5],  # Top 5 repos for better context
                     matching_skills=matching_skills,
-                    relevance_score=relevance,
+                    relevance_score=0.0,  # Will be set by batch scoring
                     skill_match_percentage=skill_match_percentage,
                     is_exact_match=is_exact_match
                 )
@@ -456,7 +515,20 @@ class GitHubSearchAgent:
             else:
                 low_relevance_count += 1
         
-        # Step 4: Prioritize exact matches, then fall back to partial matches
+        # Step 4: Batch score all candidates with a single LLM call (much faster)
+        if developers and job_analysis:
+            if progress_callback:
+                progress_callback(f"Analyzing skills for {len(developers)} candidates...", 55)
+            print(f"  🤖 Scoring {len(developers)} candidates with AI...")
+            if progress_callback:
+                progress_callback("Scoring candidates with AI...", 65)
+            developers = self._llm_batch_score_candidates(
+                developers,
+                skills,
+                job_analysis
+            )
+        
+        # Step 5: Prioritize exact matches, then fall back to partial matches
         # Separate candidates into exact matches and partial matches
         exact_matches = [d for d in developers if d.is_exact_match]
         partial_matches = [d for d in developers if not d.is_exact_match]
@@ -470,26 +542,7 @@ class GitHubSearchAgent:
         # Combine: exact matches first, then partial matches
         developers = exact_matches + partial_matches
         
-        # Step 5: LLM-based final ranking for top candidates (only if we have exact matches)
-        if developers and job_analysis:
-            # Only re-rank if we have exact matches, otherwise use skill-based ranking
-            if exact_matches:
-                # Re-rank exact matches for better ordering
-                exact_matches = self._llm_rank_candidates(
-                    exact_matches[:max_candidates * 2],  # Re-rank top 2x exact matches
-                    skills,
-                    job_analysis
-                )
-                # Recombine: re-ranked exact matches + partial matches
-                developers = exact_matches + partial_matches
-            else:
-                # If no exact matches, re-rank partial matches
-                partial_matches = self._llm_rank_candidates(
-                    partial_matches[:max_candidates * 2],  # Re-rank top 2x partial matches
-                    skills,
-                    job_analysis
-                )
-                developers = partial_matches
+        # Step 6: Final sorting (already scored, just sort by score)
         
         # Final sort: exact matches first (by skill match % and relevance), then partial matches
         developers = sorted(
@@ -514,25 +567,106 @@ class GitHubSearchAgent:
         if partial_matches:
             print(f"  ℹ Found {len(partial_matches)} partial match(es) (<80% skills)")
         
-        # Debug: Log if no candidates found
-        if not developers:
-            print(f"  ⚠ No candidates passed the filtering criteria")
-            print(f"     - Skills searched: {skills[:5]}")
-            print(f"     - Total candidates evaluated: {len(all_candidates)}")
-            print(f"     - Filtered: {filtered_count}, No repos: {no_repos_count}, Low relevance: {low_relevance_count}")
+        # Agentic behavior: If we don't have enough candidates, expand search
+        if len(developers) < max_candidates:
+            print(f"  ⚠ Only found {len(developers)} candidates, expanding search...")
+            
+            # Expand search: try searching with broader terms
+            expanded_candidates = []
+            
+            # Try searching with individual skills (limited to max_candidates)
+            for skill in skills[:5]:  # Try top 5 skills
+                if len(expanded_candidates) >= max_candidates:
+                    break
+                skill_results = search_users_by_skills([skill], max_results=max_candidates)
+                if skill_results.get("success"):
+                    new_users = [u.get("username") for u in skill_results.get("users", [])]
+                    expanded_candidates.extend([u for u in new_users if u not in all_candidates])
+            
+            # Fetch profiles for expanded candidates (limited to max_candidates)
+            existing_usernames = {d.username for d in developers}
+            for username in expanded_candidates[:max_candidates]:
+                if username in existing_usernames:
+                    continue
+                    
+                profile = fetch_user_profile(username)
+                if not profile.get("success") or profile.get("is_organization") or profile.get("type") != "User":
+                    continue
+                
+                # Check bio for skills
+                bio = (profile.get("bio") or "").lower()
+                matching_skills_bio = []
+                skills_lower = {s.lower(): s for s in skills}
+                for skill_lower, skill_orig in skills_lower.items():
+                    if skill_lower in bio:
+                        matching_skills_bio.append(skill_orig)
+                
+                # If bio has matching skills, include this candidate
+                if matching_skills_bio:
+                    user_repos = fetch_user_repos(username, max_repos=5)
+                    top_repos = user_repos.get("repositories", []) if user_repos.get("success") else []
+                    
+                    skill_match_percentage = (len(matching_skills_bio) / len(skills) * 100) if skills else 0.0
+                    
+                    developer = DeveloperMatch(
+                        username=profile.get("username", ""),
+                        name=profile.get("name", "") or profile.get("username", ""),
+                        html_url=profile.get("html_url", ""),
+                        bio=profile.get("bio", "") or "",
+                        location=profile.get("location", "") or "",
+                        followers=profile.get("followers", 0),
+                        public_repos=profile.get("public_repos", 0),
+                        top_repositories=top_repos[:5],
+                        matching_skills=matching_skills_bio,
+                        relevance_score=0.0,  # Will be set by batch scoring
+                        skill_match_percentage=skill_match_percentage,
+                        is_exact_match=skill_match_percentage >= 80.0
+                    )
+                    developers.append(developer)
+                    existing_usernames.add(username)
+        
+        # Re-score expanded candidates if any were added
+        if developers and job_analysis:
+            developers = self._llm_batch_score_candidates(developers, skills, job_analysis)
+        
+        # Re-sort after scoring
+        exact_matches = [d for d in developers if d.is_exact_match]
+        partial_matches = [d for d in developers if not d.is_exact_match]
+        exact_matches.sort(key=lambda d: (d.skill_match_percentage, d.relevance_score), reverse=True)
+        partial_matches.sort(key=lambda d: (d.skill_match_percentage, d.relevance_score), reverse=True)
+        developers = exact_matches + partial_matches
         
         # Select candidates: prioritize exact matches, fall back to partial if needed
+        # Always return up to max_candidates (even if scores are low)
+        selected = []
+        
         if exact_matches:
             # If we have exact matches, prioritize them
             selected = exact_matches[:max_candidates]
-            # Only add partial matches if we don't have enough exact matches
+            # Add partial matches if we don't have enough exact matches
             if len(selected) < max_candidates:
                 remaining_slots = max_candidates - len(selected)
                 selected.extend(partial_matches[:remaining_slots])
-            results.developers = selected
         else:
             # No exact matches found, use partial matches
-            results.developers = partial_matches[:max_candidates]
+            selected = partial_matches[:max_candidates] if partial_matches else []
+        
+        # Final fallback: if we still don't have enough, use all candidates sorted by score
+        if len(selected) < max_candidates and len(developers) > len(selected):
+            # Get remaining candidates sorted by score
+            remaining = [d for d in developers if d not in selected]
+            remaining.sort(key=lambda d: d.relevance_score, reverse=True)
+            needed = max_candidates - len(selected)
+            selected.extend(remaining[:needed])
+        
+        # Ensure we return at least what we have (even if below max_candidates)
+        results.developers = selected if selected else developers[:max_candidates]
+        
+        # Log final count
+        if len(results.developers) < max_candidates:
+            print(f"  ℹ Returning {len(results.developers)} candidates (requested {max_candidates})")
+        else:
+            print(f"  ✓ Returning {len(results.developers)} candidates")
         
         return results
     
@@ -610,9 +744,13 @@ class GitHubSearchAgent:
                 skills_found.add(skill_orig)
         
         # Skill overlap percentage (most important - 50 points)
+        # Even if no repos, if skills found in bio, give base score
         if skills:
             skill_overlap = len(skills_found) / len(skills)
             score += skill_overlap * 50
+            # Minimum base score if any skills match (even without repos)
+            if len(skills_found) > 0 and not repos:
+                score += 10  # Base score for bio match without repos
         
         # === REPOSITORY QUALITY (Max 25 points) ===
         if repos:
@@ -718,6 +856,279 @@ class GitHubSearchAgent:
         
         return list(matching)
     
+    def _llm_batch_score_candidates(
+        self,
+        candidates: list[DeveloperMatch],
+        required_skills: list[str],
+        job_analysis: dict
+    ) -> list[DeveloperMatch]:
+        """
+        Score all candidates in a single LLM call for efficiency.
+        
+        This is much faster than scoring candidates individually.
+        
+        Args:
+            candidates: List of DeveloperMatch objects to score
+            required_skills: Required skills from JD
+            job_analysis: Job analysis dictionary
+            
+        Returns:
+            list: Candidates with updated relevance scores
+        """
+        if not candidates:
+            return candidates
+        
+        # Safely extract job analysis values
+        job_title = (job_analysis.get('title') if job_analysis else None) or 'N/A'
+        exp_level = (job_analysis.get('experience_level') if job_analysis else None) or 'N/A'
+        tech_stack = job_analysis.get('tech_stack', []) if job_analysis else []
+        frameworks = job_analysis.get('frameworks', []) if job_analysis else []
+        tech_stack_str = ', '.join(tech_stack) if tech_stack else 'N/A'
+        frameworks_str = ', '.join(frameworks) if frameworks else 'N/A'
+        
+        # Prepare candidate summaries
+        candidate_summaries = []
+        for idx, candidate in enumerate(candidates):
+            bio_text = candidate.bio or ""
+            bio_text = bio_text[:200] if isinstance(bio_text, str) else ""
+            
+            repo_summaries = []
+            if candidate.top_repositories:
+                for repo in candidate.top_repositories[:3]:
+                    if repo:
+                        repo_desc = repo.get("description") or ""
+                        repo_summaries.append({
+                            "name": repo.get("name", ""),
+                            "description": repo_desc[:150] if repo_desc else "",
+                            "language": repo.get("language", ""),
+                            "stars": repo.get("stars", 0)
+                        })
+            
+            candidate_summaries.append({
+                "index": idx,
+                "username": candidate.username or "N/A",
+                "name": candidate.name or "N/A",
+                "bio": bio_text,
+                "location": candidate.location or "N/A",
+                "followers": candidate.followers or 0,
+                "public_repos": candidate.public_repos or 0,
+                "matching_skills": candidate.matching_skills or [],
+                "skill_match_percentage": candidate.skill_match_percentage,
+                "repositories": repo_summaries
+            })
+        
+        prompt = f"""You are an expert technical recruiter evaluating GitHub developer candidates for a job position.
+
+JOB REQUIREMENTS:
+- Title: {job_title}
+- Experience Level: {exp_level}
+- Required Skills: {', '.join(required_skills) if required_skills else 'N/A'}
+- Tech Stack: {tech_stack_str}
+- Frameworks: {frameworks_str}
+
+CANDIDATES TO SCORE:
+{json.dumps(candidate_summaries, indent=2)}
+
+Your task: Generate a relevance score (0-100) for EACH candidate based on:
+1. Skill match quality (exact matches get higher scores than partial)
+2. Experience level alignment with job requirements
+3. Repository quality and relevance
+4. Overall fit for the role
+
+Scoring Guidelines:
+- 90-100: Excellent match - has all or most required skills, strong experience
+- 70-89: Good match - has majority of required skills, relevant experience
+- 50-69: Moderate match - has some required skills, some relevant experience
+- 30-49: Partial match - has few required skills, limited relevant experience
+- 10-29: Weak match - minimal skill overlap, but some relevance
+- 0-9: Poor match - very little relevance
+
+Return ONLY a JSON object with this exact format:
+{{
+  "scores": [
+    {{"index": 0, "score": 85, "reasoning": "Brief explanation"}},
+    {{"index": 1, "score": 72, "reasoning": "Brief explanation"}},
+    ...
+  ]
+}}
+
+Do not include any other text."""
+
+        try:
+            response = litellm.completion(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are an expert technical recruiter. Always respond with valid JSON only."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
+            
+            # Safe access with None checks
+            if not response or not hasattr(response, 'choices') or not response.choices:
+                raise ValueError("Invalid response from LLM")
+            
+            if not response.choices[0] or not hasattr(response.choices[0], 'message'):
+                raise ValueError("Invalid message in response")
+            
+            content = response.choices[0].message.content
+            if not content:
+                raise ValueError("Empty content in response")
+            
+            score_data = json.loads(content)
+            scores_list = score_data.get("scores", [])
+            
+            # Create index to score mapping
+            score_map = {item.get("index"): float(item.get("score", 0)) for item in scores_list}
+            
+            # Update candidate scores
+            for idx, candidate in enumerate(candidates):
+                if idx in score_map:
+                    candidate.relevance_score = max(0, min(100, score_map[idx]))
+                else:
+                    # Fallback: use skill match percentage
+                    candidate.relevance_score = max(10, candidate.skill_match_percentage * 0.8)
+            
+            return candidates
+            
+        except Exception as e:
+            print(f"  ⚠ Batch LLM scoring failed: {e}, using fallback scores")
+            # Fallback: use skill match percentage as base score
+            for candidate in candidates:
+                candidate.relevance_score = max(10, candidate.skill_match_percentage * 0.8)
+            return candidates
+    
+    def _llm_score_candidate(
+        self,
+        profile: dict,
+        repos: list[dict],
+        matching_skills: list[str],
+        required_skills: list[str],
+        job_analysis: dict
+    ) -> float:
+        """
+        Use LLM to generate a relevance score for a single candidate.
+        
+        This replaces code-based scoring with AI-based evaluation that considers:
+        - Skill match quality (not just count)
+        - Job requirements alignment
+        - Experience level match
+        - Overall fit
+        
+        Args:
+            profile: User profile dict
+            repos: User's repositories
+            matching_skills: Skills found in candidate's profile/repos
+            required_skills: Required skills from JD
+            job_analysis: Job analysis dictionary
+            
+        Returns:
+            float: Relevance score (0-100) generated by LLM
+        """
+        # Prepare candidate summary
+        repo_summaries = []
+        if repos:
+            for repo in repos[:5]:
+                if repo:  # Check if repo is not None
+                    repo_desc = repo.get("description") or ""
+                    repo_summaries.append({
+                        "name": repo.get("name", ""),
+                        "description": repo_desc[:200] if repo_desc else "",
+                        "language": repo.get("language", ""),
+                        "stars": repo.get("stars", 0),
+                        "topics": (repo.get("topics") or [])[:5]
+                    })
+        
+        # Safely extract values with None checks
+        job_title = (job_analysis.get('title') if job_analysis else None) or 'N/A'
+        exp_level = (job_analysis.get('experience_level') if job_analysis else None) or 'N/A'
+        tech_stack = job_analysis.get('tech_stack', []) if job_analysis else []
+        frameworks = job_analysis.get('frameworks', []) if job_analysis else []
+        tech_stack_str = ', '.join(tech_stack) if tech_stack else 'N/A'
+        frameworks_str = ', '.join(frameworks) if frameworks else 'N/A'
+        
+        bio_text = profile.get('bio') or 'N/A'
+        bio_text = bio_text[:300] if isinstance(bio_text, str) else 'N/A'
+        
+        matching_skills_str = ', '.join(matching_skills) if matching_skills else 'None'
+        skill_match_pct = (len(matching_skills) / len(required_skills) * 100) if required_skills and len(required_skills) > 0 else 0.0
+        
+        prompt = f"""You are an expert technical recruiter evaluating a GitHub developer candidate for a job position.
+
+JOB REQUIREMENTS:
+- Title: {job_title}
+- Experience Level: {exp_level}
+- Required Skills: {', '.join(required_skills) if required_skills else 'N/A'}
+- Tech Stack: {tech_stack_str}
+- Frameworks: {frameworks_str}
+
+CANDIDATE PROFILE:
+- Username: {profile.get('username', 'N/A')}
+- Name: {profile.get('name', 'N/A')}
+- Bio: {bio_text}
+- Location: {profile.get('location', 'N/A')}
+- Followers: {profile.get('followers', 0)}
+- Public Repos: {profile.get('public_repos', 0)}
+- Matching Skills Found: {matching_skills_str}
+- Skills Match Percentage: {skill_match_pct:.1f}%
+
+TOP REPOSITORIES:
+{json.dumps(repo_summaries, indent=2)}
+
+Your task: Generate a relevance score (0-100) for this candidate based on:
+1. Skill match quality (exact matches get higher scores than partial)
+2. Experience level alignment with job requirements
+3. Repository quality and relevance
+4. Overall fit for the role
+
+Scoring Guidelines:
+- 90-100: Excellent match - has all or most required skills, strong experience
+- 70-89: Good match - has majority of required skills, relevant experience
+- 50-69: Moderate match - has some required skills, some relevant experience
+- 30-49: Partial match - has few required skills, limited relevant experience
+- 10-29: Weak match - minimal skill overlap, but some relevance
+- 0-9: Poor match - very little relevance
+
+Return ONLY a JSON object with this exact format:
+{{"score": 85, "reasoning": "Brief explanation of the score"}}
+
+Do not include any other text."""
+
+        try:
+            response = litellm.completion(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are an expert technical recruiter. Always respond with valid JSON only."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,  # Low temperature for consistent scoring
+                response_format={"type": "json_object"}
+            )
+            
+            # Safe access with None checks
+            if not response or not hasattr(response, 'choices') or not response.choices:
+                raise ValueError("Invalid response from LLM")
+            
+            if not response.choices[0] or not hasattr(response.choices[0], 'message'):
+                raise ValueError("Invalid message in response")
+            
+            content = response.choices[0].message.content
+            if not content:
+                raise ValueError("Empty content in response")
+            
+            score_data = json.loads(content)
+            score = float(score_data.get("score", 0))
+            
+            # Clamp score to 0-100 range
+            return max(0, min(100, score))
+            
+        except Exception as e:
+            print(f"  ⚠ LLM scoring failed for {profile.get('username', 'unknown')}: {e}, using fallback score")
+            # Fallback: use skill match percentage as base score
+            skill_match_pct = (len(matching_skills) / len(required_skills) * 100) if required_skills and len(required_skills) > 0 else 0
+            return max(10, skill_match_pct * 0.8)  # At least 10 points if any skills match
+    
     def _llm_rank_candidates(
         self,
         candidates: list[DeveloperMatch],
@@ -744,35 +1155,50 @@ class GitHubSearchAgent:
         # Prepare candidate summaries for LLM evaluation
         candidate_summaries = []
         for idx, candidate in enumerate(candidates[:15]):  # Limit to top 15 for LLM
+            bio_text = candidate.bio or ""
+            bio_text = bio_text[:200] if isinstance(bio_text, str) else ""
+            
+            top_repos = []
+            if candidate.top_repositories:
+                for r in candidate.top_repositories[:3]:
+                    if r:  # Check if repo is not None
+                        repo_desc = r.get("description") or ""
+                        top_repos.append({
+                            "name": r.get("name", ""),
+                            "description": repo_desc[:100] if repo_desc else "",
+                            "stars": r.get("stars", 0),
+                            "language": r.get("language", "")
+                        })
+            
             summary = {
                 "index": idx,
-                "username": candidate.username,
-                "name": candidate.name,
-                "bio": candidate.bio[:200] if candidate.bio else "",
-                "followers": candidate.followers,
-                "public_repos": candidate.public_repos,
-                "matching_skills": candidate.matching_skills,
-                "top_repos": [
-                    {
-                        "name": r.get("name", ""),
-                        "description": r.get("description", "")[:100] if r.get("description") else "",
-                        "stars": r.get("stars", 0),
-                        "language": r.get("language", "")
-                    }
-                    for r in candidate.top_repositories[:3]
-                ]
+                "username": candidate.username or "N/A",
+                "name": candidate.name or "N/A",
+                "bio": bio_text,
+                "followers": candidate.followers or 0,
+                "public_repos": candidate.public_repos or 0,
+                "matching_skills": candidate.matching_skills or [],
+                "top_repos": top_repos
             }
             candidate_summaries.append(summary)
+        
+        # Safely extract job analysis values
+        job_title = (job_analysis.get('title') if job_analysis else None) or 'N/A'
+        exp_level = (job_analysis.get('experience_level') if job_analysis else None) or 'N/A'
+        tech_stack = job_analysis.get('tech_stack', []) if job_analysis else []
+        frameworks = job_analysis.get('frameworks', []) if job_analysis else []
+        tech_stack_str = ', '.join(tech_stack) if tech_stack else 'N/A'
+        frameworks_str = ', '.join(frameworks) if frameworks else 'N/A'
         
         # Create LLM prompt for ranking
         prompt = f"""You are evaluating GitHub developer candidates for a job position.
 
 JOB REQUIREMENTS:
-- Title: {job_analysis.get('title', 'N/A')}
-- Experience Level: {job_analysis.get('experience_level', 'N/A')}
-- Required Skills: {', '.join(skills)}
-- Tech Stack: {', '.join(job_analysis.get('tech_stack', []))}
-- Frameworks: {', '.join(job_analysis.get('frameworks', []))}
+- Title: {job_title}
+- Experience Level: {exp_level}
+- Required Skills: {', '.join(skills) if skills else 'N/A'}
+- Tech Stack: {tech_stack_str}
+- Frameworks: {frameworks_str}
 
 CANDIDATES TO EVALUATE:
 {json.dumps(candidate_summaries, indent=2)}
@@ -800,7 +1226,17 @@ Only return the JSON, no other text."""
                 response_format={"type": "json_object"}
             )
             
+            # Safe access with None checks
+            if not response or not hasattr(response, 'choices') or not response.choices:
+                raise ValueError("Invalid response from LLM")
+            
+            if not response.choices[0] or not hasattr(response.choices[0], 'message'):
+                raise ValueError("Invalid message in response")
+            
             content = response.choices[0].message.content
+            if not content:
+                raise ValueError("Empty content in response")
+            
             ranking_data = json.loads(content)
             ranked_indices = ranking_data.get("ranked_indices", [])
             
