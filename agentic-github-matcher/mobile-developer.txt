@@ -1,19 +1,78 @@
-Technical Architect Job Description
-Location: Chennai, Tamil Nadu (Hybrid options)
-Job Type: Full-Time
-Role Overview
-We are hiring a Technical Architect to design and oversee the implementation of scalable IT solutions. This role demands strong technical leadership to align system architecture with business goals.
-Responsibilities
-Design system architecture blueprints and technical specifications.
-Evaluate and select cloud technologies (AWS, Azure, GCP) and frameworks.
-Lead technical teams and ensure adherence to architectural standards.
-Collaborate with stakeholders to define requirements.
+Position: iOS Developer (Native)
+Location: Remote / Hybrid
+Experience: 3–7 years
+Employment Type: Full-time
+
+About the Role
+
+We are seeking an experienced Native iOS Developer to join our engineering team. You will be responsible for designing and building advanced applications for the iOS platform using Swift and modern iOS frameworks. You will collaborate across teams to deliver high-quality, performant, and user-focused mobile experiences.
+
+Key Responsibilities
+
+Develop and maintain high-quality native iOS applications using Swift and Xcode.
+
+Work with UI/UX designers to convert wireframes and designs into functional, pixel-perfect screens.
+
+Integrate RESTful APIs, GraphQL, and third-party SDKs.
+
+Implement modern architectural patterns such as MVVM, VIPER, or Clean Architecture.
+
+Optimize app performance, memory usage, and battery efficiency.
+
+Write clean, modular, testable code following iOS best practices.
+
+Implement unit tests and UI tests using XCTest.
+
+Work closely with product managers, backend teams, and QA throughout development cycles.
+
+Manage the release and deployment process via TestFlight and App Store Connect.
+
+Debug production issues and continuously improve application reliability.
+
 Required Skills & Qualifications
-Cloud: AWS, Azure, or GCP expertise.
-Architecture: Microservices, API Design (REST/GraphQL), Event-Driven systems.
-DevOps: Docker, Kubernetes, CI/CD experience.
-Programming Languages: Proficiency in Java, Python, C#, or JavaScript.
-Databases: SQL/NoSQL experience.
-Experience: 7+ years in tech, 3+ in architecture role; relevant degree required.
-Preferred Location
-Role based in Chennai; preference for hybrid work model.
+
+3+ years of professional experience in Native iOS development.
+
+Strong proficiency in Swift, with solid understanding of SwiftUI and/or UIKit.
+
+Strong knowledge of:
+
+iOS frameworks (Foundation, UIKit, SwiftUI, Combine)
+
+Networking (URLSession, Alamofire)
+
+Local storage (Core Data, UserDefaults, Keychain)
+
+Push notifications and deep linking
+
+Experience working with REST APIs, JSON parsing, and async programming using Combine or async/await.
+
+Familiarity with version control (Git, GitHub) and CI/CD pipelines.
+
+Nice-to-Have
+
+Experience with Objective-C (legacy maintenance).
+
+Knowledge of mobile security practices (Keychain, SSL pinning).
+
+Experience with:
+
+Fastlane
+
+Firebase (Crashlytics, Analytics)
+
+App Store publishing guidelines
+
+Previous experience working in Agile/Scrum environments.
+
+Soft Skills
+
+Strong communication and problem-solving skills.
+
+Ability to own features end-to-end with minimal supervision.
+
+Passion for clean code, performance optimization, and user experience.
+
+Education
+
+Bachelor’s degree in Computer Science, Software Engineering, or equivalent experience.

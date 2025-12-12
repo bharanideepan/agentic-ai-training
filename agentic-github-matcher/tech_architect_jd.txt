@@ -1,0 +1,19 @@
+Technical Architect Job Description
+Location: Chennai, Tamil Nadu (Hybrid options)
+Job Type: Full-Time
+Role Overview
+We are hiring a Technical Architect to design and oversee the implementation of scalable IT solutions. This role demands strong technical leadership to align system architecture with business goals.
+Responsibilities
+Design system architecture blueprints and technical specifications.
+Evaluate and select cloud technologies (AWS, Azure, GCP) and frameworks.
+Lead technical teams and ensure adherence to architectural standards.
+Collaborate with stakeholders to define requirements.
+Required Skills & Qualifications
+Cloud: AWS, Azure, or GCP expertise.
+Architecture: Microservices, API Design (REST/GraphQL), Event-Driven systems.
+DevOps: Docker, Kubernetes, CI/CD experience.
+Programming Languages: Proficiency in Java, Python, C#, or JavaScript.
+Databases: SQL/NoSQL experience.
+Experience: 7+ years in tech, 3+ in architecture role; relevant degree required.
+Preferred Location
+Role based in Chennai; preference for hybrid work model.

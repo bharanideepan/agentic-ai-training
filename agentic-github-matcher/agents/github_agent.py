@@ -17,7 +17,7 @@ from typing import Callable, Any
 from dataclasses import dataclass, field
 
 # AutoGen imports (pyautogen 0.2.x classic API)
-from autogen import ConversableAgent, AssistantAgent
+from autogen import ConversableAgent, AssistantAgent, UserProxyAgent
 
 # LiteLLM for model gateway
 import litellm
@@ -96,26 +96,33 @@ GITHUB_AGENT_SYSTEM_PROMPT = """You are a GitHub Search Agent specialized in fin
 
 Your role is to:
 1. Take a list of required skills and technologies
-2. Search GitHub for relevant repositories and developers
-3. Compile a list of potential candidates who match the requirements
+2. Use your tools to search GitHub for relevant repositories and developers
+3. Make intelligent decisions about which tools to call and in what order
+4. Fetch detailed information for promising candidates
+5. Compile a comprehensive list of potential candidates who match the requirements
 
 You have access to the following tools (via direct GitHub REST API):
-- search_repositories_by_skills: Search for repositories matching skills
-- search_users_by_skills: Search for developers matching skills
-- fetch_user_profile: Get detailed profile for a GitHub user
-- fetch_user_repos: Get repositories for a specific user
+- search_repositories_by_skills: Search for repositories matching skills. Use this to find repos that match the required technologies.
+- search_users_by_skills: Search for GitHub users/developers by skill keywords. Use this to find developers directly.
+- fetch_user_profile: Get detailed profile information for a GitHub user. Use this after finding promising usernames.
+- fetch_user_repos: Get repositories for a specific user. Use this to analyze a developer's work.
 
-Note: These tools use the GitHub REST API directly for reliable GitHub API access.
+STRATEGY:
+1. Start by searching for repositories matching the key skills to find active projects
+2. Search for users directly based on skills to find developers
+3. For EACH promising candidate you find:
+   a. ALWAYS call fetch_user_profile to get their profile
+   b. ALWAYS call fetch_user_repos to get their repositories (this is REQUIRED)
+4. Analyze the results to identify the best matches
+5. Make multiple tool calls as needed - you can call tools multiple times with different parameters
 
-WORKFLOW:
-1. First, search for repositories matching the key skills
-2. Identify repository owners who might be good candidates
-3. Search for users directly based on skills
-4. Fetch detailed profiles for promising candidates
-5. Compile results with relevant information
-
-Always aim to find 5-10 relevant candidates with their key information.
-Return results in a structured format that can be used for formatting.
+IMPORTANT:
+- Use your tools actively - don't just describe what you would do, actually call the tools
+- You MUST call BOTH fetch_user_profile AND fetch_user_repos for each candidate you want to evaluate
+- Never fetch a profile without also fetching their repositories - both are needed for proper evaluation
+- You can make multiple tool calls in sequence to gather comprehensive information
+- Focus on finding 5-10 high-quality candidates
+- After gathering data, provide a summary of your findings
 """
 
 
@@ -192,8 +199,12 @@ class GitHubSearchAgent:
             system_message=GITHUB_AGENT_SYSTEM_PROMPT,
             llm_config=self.llm_config,
             human_input_mode="NEVER",
-            max_consecutive_auto_reply=5,
+            max_consecutive_auto_reply=10,  # Increased to allow more tool call iterations
         )
+        
+        # Register tools with the agent for LLM and execution
+        # This enables true agentic tool calling
+        self._register_tools()
     
     def _get_tool_definitions(self) -> list[dict]:
         """
@@ -290,9 +301,54 @@ class GitHubSearchAgent:
             }
         ]
     
+    def _register_tools(self):
+        """
+        Register tool functions with the AutoGen agent for LLM tool calling.
+        This enables the agent to decide which tools to call and when.
+        """
+        # Register each tool for both LLM (so agent knows about it) and execution (so it can be called)
+        @self.agent.register_for_llm(description="Search GitHub repositories by skill keywords. Returns repos sorted by stars.")
+        @self.agent.register_for_execution()
+        def search_repositories_by_skills(skills: list[str], max_results: int = 10) -> dict:
+            """Search GitHub repositories by skill keywords."""
+            print(f"  [AGENT TOOL CALL] 🤖 search_repositories_by_skills(skills={skills[:3]}, max_results={max_results})")
+            result = self.tools["search_repositories_by_skills"](skills, max_results)
+            print(f"  [AGENT TOOL CALL] ✓ search_repositories_by_skills returned {len(result.get('repositories', []))} repos")
+            return result
+        
+        @self.agent.register_for_llm(description="Search for GitHub users/developers by skill keywords.")
+        @self.agent.register_for_execution()
+        def search_users_by_skills(skills: list[str], max_results: int = 10) -> dict:
+            """Search for GitHub users/developers by skill keywords."""
+            print(f"  [AGENT TOOL CALL] 🤖 search_users_by_skills(skills={skills[:3]}, max_results={max_results})")
+            result = self.tools["search_users_by_skills"](skills, max_results)
+            print(f"  [AGENT TOOL CALL] ✓ search_users_by_skills returned {len(result.get('users', []))} users")
+            return result
+        
+        @self.agent.register_for_llm(description="Fetch detailed profile information for a GitHub user.")
+        @self.agent.register_for_execution()
+        def fetch_user_profile(username: str) -> dict:
+            """Fetch detailed profile information for a GitHub user."""
+            print(f"  [AGENT TOOL CALL] 🤖 fetch_user_profile(username={username})")
+            result = self.tools["fetch_user_profile"](username)
+            success = "✓" if result.get("success") else "✗"
+            print(f"  [AGENT TOOL CALL] {success} fetch_user_profile for {username}")
+            return result
+        
+        @self.agent.register_for_llm(description="Fetch repositories for a specific GitHub user.")
+        @self.agent.register_for_execution()
+        def fetch_user_repos(username: str, max_repos: int = 10) -> dict:
+            """Fetch repositories for a specific GitHub user."""
+            print(f"  [AGENT TOOL CALL] 🤖 fetch_user_repos(username={username}, max_repos={max_repos})")
+            result = self.tools["fetch_user_repos"](username, max_repos)
+            print(f"  [AGENT TOOL CALL] ✓ fetch_user_repos returned {len(result.get('repositories', []))} repos for {username}")
+            return result
+        
+        print(f"  [GitHubSearchAgent] ✓ Tools registered for agentic tool calling")
+    
     def _execute_tool(self, tool_name: str, arguments: dict) -> Any:
         """
-        Execute a tool function by name.
+        Execute a tool function by name (fallback method).
         
         Args:
             tool_name: Name of the tool to execute
@@ -306,6 +362,111 @@ class GitHubSearchAgent:
         else:
             return {"error": f"Unknown tool: {tool_name}"}
     
+    def _extract_tool_results_from_messages(self, messages: list) -> dict:
+        """
+        Extract tool call results from AutoGen agent messages.
+        
+        Args:
+            messages: List of messages from agent conversation
+            
+        Returns:
+            dict: Extracted results with 'repositories', 'users', 'profiles', 'repos'
+        """
+        extracted = {
+            "repositories": [],
+            "users": [],
+            "profiles": {},
+            "repos": {}
+        }
+        
+        for idx, msg in enumerate(messages):
+            if not isinstance(msg, dict):
+                continue
+            
+            # AutoGen stores tool responses in 'tool_responses' or as separate tool role messages
+            tool_responses = msg.get("tool_responses", [])
+            
+            # Also check if message itself is a tool response
+            if msg.get("role") == "tool":
+                tool_responses.append(msg)
+            
+            # Check for tool_calls in assistant messages (these are the tool call requests)
+            tool_calls = msg.get("tool_calls", [])
+            
+            for tool_resp in tool_responses:
+                content = tool_resp.get("content", "")
+                tool_name = tool_resp.get("name", "")
+                
+                # Try to parse content
+                result = None
+                if isinstance(content, str):
+                    try:
+                        result = json.loads(content)
+                    except (json.JSONDecodeError, TypeError):
+                        # Content might already be a dict or other type
+                        result = content
+                elif isinstance(content, dict):
+                    result = content
+                else:
+                    continue
+                
+                if not isinstance(result, dict):
+                    continue
+                
+                # Identify tool by result structure since tool_name might be empty
+                # Check result keys to determine which tool was called
+                has_repositories = "repositories" in result and isinstance(result.get("repositories"), list)
+                has_users = "users" in result and isinstance(result.get("users"), list)
+                has_username = "username" in result
+                has_query = "query" in result
+                is_profile = has_username and "bio" in result and result.get("success", False)
+                is_repos = has_username and has_repositories
+                
+                # Debug: show result keys to understand structure
+                result_keys = list(result.keys())[:10]  # Show first 10 keys
+                repos_count = len(result.get("repositories", [])) if has_repositories else 0
+                
+                # Extract based on result structure (more reliable than tool name)
+                if has_repositories and has_query:
+                    # This is search_repositories_by_skills result
+                    repos = result.get("repositories", [])
+                    if repos:
+                        extracted["repositories"].extend(repos)
+                elif has_users and has_query:
+                    # This is search_users_by_skills result
+                    users = result.get("users", [])
+                    if users:
+                        extracted["users"].extend(users)
+                elif has_users:
+                    # Fallback: extract users even without query field (more robust)
+                    users = result.get("users", [])
+                    if users:
+                        extracted["users"].extend(users)
+                elif is_repos:
+                    # This is fetch_user_repos result - check this BEFORE is_profile
+                    # because fetch_user_repos has username + repositories
+                    username = result.get("username", "")
+                    repos = result.get("repositories", [])
+                    if username and repos:
+                        extracted["repos"][username] = repos
+                    elif username:
+                        # Even if repos list is empty, store it to indicate we tried
+                        extracted["repos"][username] = []
+                elif is_profile:
+                    # This is fetch_user_profile result
+                    username = result.get("username", "")
+                    if username:
+                        extracted["profiles"][username] = result
+                elif has_username and has_repositories:
+                    # Fallback: extract repos even if other conditions don't match
+                    # (e.g., if success field is missing or structure is slightly different)
+                    username = result.get("username", "")
+                    repos = result.get("repositories", [])
+                    if username and repos:
+                        extracted["repos"][username] = repos
+        
+        return extracted
+    
     def search(
         self, 
         skills: list[str], 
@@ -316,50 +477,293 @@ class GitHubSearchAgent:
         """
         Search GitHub for developers and repositories matching the given skills.
         
-        Enhanced search strategy:
-        1. Multi-strategy repository search (language, topic, description)
-        2. User search with multiple query types
-        3. Fetch detailed profiles and repositories
-        4. Intelligent scoring based on skill overlap and job requirements
-        5. LLM-based candidate evaluation for top matches
+        This method uses true agentic behavior - the LLM agent decides which tools
+        to call and in what order to find the best candidates.
         
         Args:
             skills: List of skills to search for
             job_analysis: Optional job analysis dict for better matching
             max_candidates: Maximum number of candidates to return
+            progress_callback: Optional callback for progress updates
             
         Returns:
             SearchResults: Compiled search results
         """
         results = SearchResults(query_skills=skills)
         
+        print(f"  [GitHubSearchAgent] 🤖 Starting agentic search with {len(skills)} skills")
+        print(f"  [GitHubSearchAgent] ✓ Using LLM agent for tool calling decisions")
+        print(f"  [EXECUTION MODE] 🤖 AGENTIC MODE - Tools will be called by LLM agent")
+        
+        if progress_callback:
+            progress_callback("Agent is analyzing requirements and planning tool calls...", 20)
+        
+        # Build the search prompt for the agent
+        job_info = ""
+        if job_analysis:
+            job_title = job_analysis.get("title", "N/A")
+            exp_level = job_analysis.get("experience_level", "N/A")
+            job_info = f"\nJob Title: {job_title}\nExperience Level: {exp_level}\n"
+        
+        search_prompt = f"""Search GitHub for developers and repositories matching these skills: {', '.join(skills)}.
+        
+{job_info}
+Your task:
+1. Use search_repositories_by_skills to find repositories matching these skills
+2. Use search_users_by_skills to find developers with these skills
+3. For EACH promising candidate you identify:
+   - ALWAYS call fetch_user_profile(username) to get their profile
+   - ALWAYS call fetch_user_repos(username, max_repos=10) to get their repositories
+   - Both calls are REQUIRED for proper candidate evaluation
+4. Aim to find {max_candidates} high-quality candidates
+
+CRITICAL: When you fetch a user's profile, you MUST also fetch their repositories in the same sequence. 
+Do not skip fetch_user_repos - it is essential for evaluating candidates.
+
+Start by searching for repositories and users. Then fetch detailed profiles AND repositories for the most promising candidates.
+Make multiple tool calls as needed to gather comprehensive information."""
+        
+        try:
+            # Clear agent history for fresh start
+            self.agent.clear_history()
+            
+            if progress_callback:
+                progress_callback("Agent is making tool calls to search GitHub...", 30)
+            
+            # Use agent to make tool calls - the agent will decide which tools to use
+            # Create a simple user proxy to initiate the conversation
+            print("  🤖 Agent is analyzing and making tool calls...")
+            
+            # Create a user proxy agent to initiate conversation
+            # In AutoGen, when an agent makes tool calls, the UserProxyAgent executes them
+            # max_consecutive_auto_reply must be > 0 to allow tool execution
+            user_proxy = UserProxyAgent(
+                name="user_proxy",
+                human_input_mode="NEVER",
+                max_consecutive_auto_reply=10,  # Allow auto-reply to execute tool calls
+                code_execution_config=False,  # Don't execute code, just tools
+            )
+            
+            # Register tools with user_proxy for execution
+            # When the agent suggests tool calls, user_proxy will execute them
+            @user_proxy.register_for_execution()
+            def search_repositories_by_skills(skills: list[str], max_results: int = 10) -> dict:
+                return self.tools["search_repositories_by_skills"](skills, max_results)
+            
+            @user_proxy.register_for_execution()
+            def search_users_by_skills(skills: list[str], max_results: int = 10) -> dict:
+                return self.tools["search_users_by_skills"](skills, max_results)
+            
+            @user_proxy.register_for_execution()
+            def fetch_user_profile(username: str) -> dict:
+                return self.tools["fetch_user_profile"](username)
+            
+            @user_proxy.register_for_execution()
+            def fetch_user_repos(username: str, max_repos: int = 10) -> dict:
+                return self.tools["fetch_user_repos"](username, max_repos)
+            
+            
+            # Initiate chat - the agent will make tool calls as needed
+            # The user_proxy will execute the tool calls when the agent suggests them
+            chat_result = user_proxy.initiate_chat(
+                recipient=self.agent,
+                message=search_prompt,
+                max_turns=10,  # Allow multiple tool call iterations
+                silent=False
+            )
+            
+            if progress_callback:
+                progress_callback("Extracting results from agent's tool calls...", 60)
+            
+            # Extract tool results from agent's conversation history
+            # AutoGen stores messages in chat_messages dict keyed by sender
+            messages = []
+            if hasattr(self.agent, 'chat_messages'):
+                # Try different keys - might be keyed by user_proxy or agent
+                if user_proxy in self.agent.chat_messages:
+                    messages = self.agent.chat_messages[user_proxy]
+                elif self.agent in self.agent.chat_messages:
+                    messages = self.agent.chat_messages[self.agent]
+                elif hasattr(self.agent.chat_messages, 'values'):
+                    # Get all messages from all senders
+                    all_messages = []
+                    for msg_list in self.agent.chat_messages.values():
+                        all_messages.extend(msg_list)
+                    messages = all_messages
+            
+            if hasattr(self.agent, '_oai_messages'):
+                # Also check _oai_messages
+                if user_proxy in self.agent._oai_messages:
+                    messages.extend(self.agent._oai_messages[user_proxy])
+                elif self.agent in self.agent._oai_messages:
+                    messages.extend(self.agent._oai_messages[self.agent])
+            
+            extracted = self._extract_tool_results_from_messages(messages)
+            
+            # Also try to extract from chat result if available
+            if hasattr(chat_result, 'chat_history'):
+                additional = self._extract_tool_results_from_messages(chat_result.chat_history)
+                # Merge results
+                extracted["repositories"].extend(additional["repositories"])
+                extracted["users"].extend(additional["users"])
+                extracted["profiles"].update(additional["profiles"])
+                extracted["repos"].update(additional["repos"])
+            
+            # Also check user_proxy's message history
+            if hasattr(user_proxy, 'chat_messages'):
+                for sender, msg_list in user_proxy.chat_messages.items():
+                    additional = self._extract_tool_results_from_messages(msg_list)
+                    extracted["repositories"].extend(additional["repositories"])
+                    extracted["users"].extend(additional["users"])
+                    extracted["profiles"].update(additional["profiles"])
+                    extracted["repos"].update(additional["repos"])
+            
+            # Process extracted repositories
+            if extracted["repositories"]:
+                results.repositories = extracted["repositories"][:30]  # Limit to top 30
+                results.total_repos_found = len(results.repositories)
+                print(f"  ✓ Found {len(results.repositories)} repositories via agent")
+            
+            # Process extracted users
+            user_candidates = []
+            if extracted["users"]:
+                for user in extracted["users"]:
+                    username = user.get("username", "")
+                    if username:
+                        user_candidates.append(username)
+                print(f"  ✓ Found {len(user_candidates)} user candidates via agent")
+            
+            # Also extract usernames from profiles (in case user extraction failed but profiles were fetched)
+            if extracted["profiles"]:
+                profile_usernames = [username for username in extracted["profiles"].keys() if username]
+                user_candidates.extend(profile_usernames)
+                print(f"  ✓ Added {len(profile_usernames)} candidates from extracted profiles")
+            
+            # Get profiles from extracted data or fetch missing ones
+            if progress_callback:
+                progress_callback(f"Processing {len(user_candidates)} candidates...", 70)
+            
+            # Use extracted profiles or fetch new ones
+            all_candidates = list(set(user_candidates))
+            developers = []
+            
+            for username in all_candidates[:max_candidates]:
+                # Use extracted profile if available, otherwise fetch
+                if username in extracted["profiles"]:
+                    profile = extracted["profiles"][username]
+                    print(f"  [AGENT RESULT] ✓ Using profile for {username} from agent tool call")
+                else:
+                    print(f"  [PROGRAMMATIC CALL] 📝 fetch_user_profile(username={username}) [fallback - not in agent results]")
+                    profile = fetch_user_profile(username)
+                
+                if not profile.get("success") or profile.get("is_organization") or profile.get("type") != "User":
+                    continue
+                
+                # Use extracted repos if available, otherwise fetch
+                if username in extracted["repos"]:
+                    top_repos = extracted["repos"][username]
+                    print(f"  [AGENT RESULT] ✓ Using repos for {username} from agent tool call")
+                else:
+                    # Agent didn't call fetch_user_repos for this user, so we fetch it programmatically
+                    # This is expected when the agent only fetches profiles but not repos
+                    print(f"  [PROGRAMMATIC CALL] 📝 fetch_user_repos(username={username}, max_repos=10) [fallback - agent didn't fetch repos]")
+                    user_repos = fetch_user_repos(username, max_repos=10)
+                    top_repos = user_repos.get("repositories", []) if user_repos.get("success") else []
+                
+                # Extract matching skills
+                matching_skills = self._extract_matching_skills(top_repos, skills) if top_repos else []
+                
+                # Check bio for skills
+                bio = (profile.get("bio") or "").lower()
+                skills_lower = {s.lower(): s for s in skills}
+                for skill_lower, skill_orig in skills_lower.items():
+                    if skill_lower in bio and skill_orig not in matching_skills:
+                        matching_skills.append(skill_orig)
+                
+                if not matching_skills:
+                    continue
+                
+                skill_match_percentage = (len(matching_skills) / len(skills) * 100) if skills else 0.0
+                
+                developer = DeveloperMatch(
+                    username=profile.get("username", ""),
+                    name=profile.get("name", "") or profile.get("username", ""),
+                    html_url=profile.get("html_url", ""),
+                    bio=profile.get("bio", "") or "",
+                    location=profile.get("location", "") or "",
+                    followers=profile.get("followers", 0),
+                    public_repos=profile.get("public_repos", 0),
+                    top_repositories=top_repos[:5],
+                    matching_skills=matching_skills,
+                    relevance_score=0.0,
+                    skill_match_percentage=skill_match_percentage,
+                    is_exact_match=skill_match_percentage >= 80.0
+                )
+                developers.append(developer)
+            
+            # Score candidates if job analysis provided
+            if developers and job_analysis:
+                if progress_callback:
+                    progress_callback("Scoring candidates with AI...", 80)
+                developers = self._llm_batch_score_candidates(developers, skills, job_analysis)
+            
+            # Sort and select final candidates
+            exact_matches = [d for d in developers if d.is_exact_match]
+            partial_matches = [d for d in developers if not d.is_exact_match]
+            
+            exact_matches.sort(key=lambda d: (d.skill_match_percentage, d.relevance_score), reverse=True)
+            partial_matches.sort(key=lambda d: (d.skill_match_percentage, d.relevance_score), reverse=True)
+            
+            developers = exact_matches + partial_matches
+            results.developers = developers[:max_candidates]
+            results.total_developers_found = len(results.developers)
+            
+            print(f"  ✓ Agentic search complete: {len(results.developers)} candidates found")
+            return results
+            
+        except Exception as e:
+            print(f"  ⚠ Agentic search encountered an error: {e}")
+            print(f"  ⚠ Falling back to direct search method...")
+            # Fallback to direct method if agent fails
+            return self._direct_search(skills, job_analysis, max_candidates, progress_callback)
+    
+    def _direct_search(
+        self,
+        skills: list[str],
+        job_analysis: dict = None,
+        max_candidates: int = 10,
+        progress_callback: Callable[[str, float], None] = None
+    ) -> SearchResults:
+        """
+        Direct search method (fallback) - uses direct function calls.
+        This is the original implementation kept as fallback.
+        """
+        results = SearchResults(query_skills=skills)
+        
         # Step 1: Enhanced repository search with multiple strategies
         strategy_info = "via Direct REST API"
-        print(f"  [GitHubSearchAgent] Starting search with {len(skills)} skills")
-        print(f"  [GitHubSearchAgent] Strategy: {strategy_info}")
+        print(f"  [GitHubSearchAgent] Starting direct search with {len(skills)} skills")
+        print(f"  [EXECUTION MODE] 📝 PROGRAMMATIC MODE - Tools called directly by code")
         if progress_callback:
             progress_callback(f"Searching GitHub repositories ({strategy_info})...", 35)
-        print(f"  🔍 Searching repositories for skills: {skills[:5]} ({strategy_info})")
         
         # Strategy 1: Search by languages
         language_skills = [s for s in skills if self._is_language(s)]
         if language_skills:
+            print(f"  [PROGRAMMATIC CALL] 📝 search_repositories_by_skills(skills={language_skills[:3]}, max_results=20)")
             repo_results_lang = search_repositories_by_skills(language_skills, max_results=20)
             if repo_results_lang.get("success"):
                 results.repositories.extend(repo_results_lang.get("repositories", []))
-            else:
-                error_msg = repo_results_lang.get("error", "Unknown error")
-                print(f"  ⚠ Repository search failed: {error_msg}")
+                print(f"  [PROGRAMMATIC CALL] ✓ Found {len(repo_results_lang.get('repositories', []))} repos")
         
         # Strategy 2: Search by frameworks/tools (topic-based)
         framework_skills = [s for s in skills if not self._is_language(s)]
         if framework_skills:
+            print(f"  [PROGRAMMATIC CALL] 📝 search_repositories_by_skills(skills={framework_skills[:3]}, max_results=20)")
             repo_results_fw = search_repositories_by_skills(framework_skills, max_results=20)
             if repo_results_fw.get("success"):
                 results.repositories.extend(repo_results_fw.get("repositories", []))
-            else:
-                error_msg = repo_results_fw.get("error", "Unknown error")
-                print(f"  ⚠ Repository search failed: {error_msg}")
+                print(f"  [PROGRAMMATIC CALL] ✓ Found {len(repo_results_fw.get('repositories', []))} repos")
         
         # Deduplicate repositories by full_name
         seen_repos = set()
@@ -402,9 +806,11 @@ class GitHubSearchAgent:
         for skill in skills[:5]:  # Try top 5 skills individually
             if len(user_candidates) >= max_candidates:
                 break
+            print(f"  [PROGRAMMATIC CALL] 📝 search_users_by_skills(skills=[{skill}], max_results={max_candidates})")
             skill_results = search_users_by_skills([skill], max_results=max_candidates)
             if skill_results.get("success"):
                 new_candidates = [u.get("username") for u in skill_results.get("users", [])]
+                print(f"  [PROGRAMMATIC CALL] ✓ Found {len(new_candidates)} users for skill '{skill}'")
                 for candidate in new_candidates:
                     if candidate not in seen_candidates and len(user_candidates) < max_candidates:
                         user_candidates.append(candidate)
@@ -413,9 +819,11 @@ class GitHubSearchAgent:
         # Strategy 2: Also search by primary skills combination (for exact matches)
         if len(user_candidates) < max_candidates and len(skills) >= 2:
             primary_skills = skills[:3] if len(skills) >= 3 else skills
+            print(f"  [PROGRAMMATIC CALL] 📝 search_users_by_skills(skills={primary_skills}, max_results={max_candidates})")
             user_results = search_users_by_skills(primary_skills, max_results=max_candidates)
             if user_results.get("success"):
                 results.total_developers_found = user_results.get("total_count", 0)
+                print(f"  [PROGRAMMATIC CALL] ✓ Found {len(user_results.get('users', []))} users for combined skills")
                 for candidate in [u.get("username") for u in user_results.get("users", [])]:
                     if candidate not in seen_candidates and len(user_candidates) < max_candidates:
                         user_candidates.append(candidate)
@@ -443,9 +851,11 @@ class GitHubSearchAgent:
             if not username:
                 continue
                 
+            print(f"  [PROGRAMMATIC CALL] 📝 fetch_user_profile(username={username})")
             profile = fetch_user_profile(username)
             
             if not profile.get("success"):
+                print(f"  [PROGRAMMATIC CALL] ✗ Failed to fetch profile for {username}")
                 filtered_count += 1
                 continue
             
@@ -470,8 +880,10 @@ class GitHubSearchAgent:
                     continue
             
             # Fetch user's top repos (more repos for better analysis)
+            print(f"  [PROGRAMMATIC CALL] 📝 fetch_user_repos(username={username}, max_repos=10)")
             user_repos = fetch_user_repos(username, max_repos=10)
             top_repos = user_repos.get("repositories", []) if user_repos.get("success") else []
+            print(f"  [PROGRAMMATIC CALL] ✓ Fetched {len(top_repos)} repos for {username}")
             
             # Extract matching skills from repos
             matching_skills = self._extract_matching_skills(top_repos, skills) if top_repos else []
@@ -578,6 +990,7 @@ class GitHubSearchAgent:
             for skill in skills[:5]:  # Try top 5 skills
                 if len(expanded_candidates) >= max_candidates:
                     break
+                print(f"  [PROGRAMMATIC CALL] 📝 search_users_by_skills(skills=[{skill}], max_results={max_candidates}) [expanded search]")
                 skill_results = search_users_by_skills([skill], max_results=max_candidates)
                 if skill_results.get("success"):
                     new_users = [u.get("username") for u in skill_results.get("users", [])]
@@ -589,6 +1002,7 @@ class GitHubSearchAgent:
                 if username in existing_usernames:
                     continue
                     
+                print(f"  [PROGRAMMATIC CALL] 📝 fetch_user_profile(username={username}) [expanded search]")
                 profile = fetch_user_profile(username)
                 if not profile.get("success") or profile.get("is_organization") or profile.get("type") != "User":
                     continue
@@ -603,6 +1017,7 @@ class GitHubSearchAgent:
                 
                 # If bio has matching skills, include this candidate
                 if matching_skills_bio:
+                    print(f"  [PROGRAMMATIC CALL] 📝 fetch_user_repos(username={username}, max_repos=5) [expanded search]")
                     user_repos = fetch_user_repos(username, max_repos=5)
                     top_repos = user_repos.get("repositories", []) if user_repos.get("success") else []
                     
