@@ -72,17 +72,9 @@ async def startup_event():
     guardrails = initialize_guardrails()
     print("  ✓ Guardrails initialized")
     
-    # Initialize MCP client (if available)
-    try:
-        from tools.github_mcp import initialize_mcp_client
-        mcp_initialized = await initialize_mcp_client()
-        if mcp_initialized:
-            print("  ✓ MCP client initialized")
-        else:
-            print("  ℹ MCP client unavailable, using direct REST API")
-    except Exception as e:
-        print(f"  ⚠ MCP initialization error: {e}")
-        print("  ℹ Continuing with direct REST API fallback")
+    # Note: MCP client is initialized on-demand by agents
+    # No global initialization needed - each agent creates its own MCP session
+    print("  ℹ GitHub MCP will be initialized by agents as needed")
     
     print("✅ API ready!")
 
@@ -222,11 +214,11 @@ async def process_workflow_stream(
             with progress_lock:
                 progress_updates.append((message, progress))
         
-        def run_search():
-            """Run search in background thread."""
+        async def run_search():
+            """Run search asynchronously."""
             try:
                 analysis_dict = job_analysis.to_dict()
-                result = current_workflow.github_agent.search(
+                result = await current_workflow.github_agent.search(
                     skills=searchable_skills,
                     job_analysis=analysis_dict,
                     max_candidates=max_candidates,
@@ -240,18 +232,17 @@ async def process_workflow_stream(
         
         analysis_dict = job_analysis.to_dict()
         
-        # Using direct REST API only (MCP disabled)
-        github_strategy = "Direct REST API"
+        # Using GitHub MCP (async)
+        github_strategy = "GitHub MCP"
         
         # Stream initial search status with strategy info
         yield create_chunk("status", f"Searching GitHub repositories (via {github_strategy})...", 35, {
             "strategy": github_strategy,
-            "search_method": "direct"
+            "search_method": "mcp"
         })
         
-        # Start search in background thread
-        search_thread = threading.Thread(target=run_search, daemon=True)
-        search_thread.start()
+        # Start search as async task
+        search_task = asyncio.create_task(run_search())
         
         # Stream progress updates in real-time while search is running
         last_update_index = 0
@@ -270,15 +261,18 @@ async def process_workflow_stream(
                 for message, progress_val in current_updates:
                     yield create_chunk("status", message, progress_val, {
                         "strategy": github_strategy,
-                        "search_method": "direct"
+                        "search_method": "mcp"
                     })
             
             # Small delay to prevent busy waiting (reduced for better responsiveness)
             await asyncio.sleep(0.05)
             wait_count += 1
         
-        # Wait for thread to complete (with timeout)
-        search_thread.join(timeout=5)
+        # Wait for async task to complete
+        try:
+            await asyncio.wait_for(search_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            pass  # Task may still be running, but we'll check results anyway
         
         # Check for errors
         if search_result_container["error"]:

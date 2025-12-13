@@ -317,7 +317,7 @@ class AgenticWorkflow:
         
         console.print("[green]✓[/green] All agents initialized successfully\n")
     
-    def run(self, job_description: str, output_format: str = "rich") -> str:
+    async def run(self, job_description: str, output_format: str = "rich") -> str:
         """
         Execute the full workflow pipeline.
         
@@ -380,7 +380,7 @@ class AgenticWorkflow:
             task = progress.add_task("Finding matching developers and repositories...", total=None)
             # Convert job_analysis to dict for passing to search
             analysis_dict = job_analysis.to_dict()
-            search_results = self.github_agent.search(
+            search_results = await self.github_agent.search(
                 skills=searchable_skills,  # Use all searchable skills for better matching
                 job_analysis=analysis_dict,  # Pass job analysis for enhanced scoring
                 max_candidates=10
@@ -657,10 +657,10 @@ Examples:
             guardrails=guardrails
         )
         
-        result = workflow.run(
+        result = asyncio.run(workflow.run(
             job_description=job_description,
             output_format=args.format
-        )
+        ))
         
         # If not rich format, print the result
         if args.format != "rich":

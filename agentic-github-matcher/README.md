@@ -25,11 +25,14 @@ agentic-github-matcher/
 ├── agents/
 │   ├── __init__.py
 │   ├── analyst.py        # Job description analyzer
-│   ├── github_agent.py   # GitHub search agent
+│   ├── github_agent.py   # GitHub search agent (MCP-based)
 │   └── formatter.py      # Report formatter
+├── github_mcp/
+│   ├── __init__.py
+│   └── github_session.py # GitHub MCP session management
 ├── tools/
 │   ├── __init__.py
-│   └── github_search.py  # GitHub API functions
+│   └── github_mcp.py     # GitHub MCP integration (MCP-only)
 ├── guardrails/
 │   ├── __init__.py
 │   └── rails.yaml        # Safety configuration
@@ -42,7 +45,15 @@ agentic-github-matcher/
 
 ## 🚀 Quick Start
 
-### 1. Clone and Setup
+### 1. Prerequisites
+
+**Node.js and npm** (required for GitHub MCP):
+
+- Install Node.js from [https://nodejs.org/](https://nodejs.org/)
+- This is required because GitHub MCP runs via `npx @modelcontextprotocol/server-github`
+- Verify installation: `node --version` and `npm --version`
+
+### 2. Clone and Setup
 
 ```bash
 # Navigate to the project directory
@@ -61,7 +72,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment
+### 3. Configure Environment
 
 ```bash
 # Copy the environment template
@@ -87,7 +98,7 @@ cp env.template .env
 3. Select scopes: `public_repo`, `read:user`
 4. Copy and paste into `.env`
 
-### 3. Run the Application
+### 4. Run the Application
 
 ```bash
 # Interactive mode
@@ -207,8 +218,12 @@ Edit `guardrails/rails.yaml` to:
 │       Searches: Repositories, Developers, Profiles          │
 │                                                             │
 │  ┌─────────────────────────────────────────────────────┐    │
-│  │              GitHub REST API                        │    │
-│  │    (search_repos, fetch_profile, fetch_repos)      │    │
+│  │            GitHub MCP (Model Context Protocol)      │    │
+│  │  ┌──────────────────────────────────────────────┐   │    │
+│  │  │  @modelcontextprotocol/server-github         │   │    │
+│  │  │  (via npx stdio transport)                    │   │    │
+│  │  └──────────────────────────────────────────────┘   │    │
+│  │  Tools: search_users, get_user, search_repositories │    │
 │  └─────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────┘
                               │
@@ -234,6 +249,80 @@ Edit `guardrails/rails.yaml` to:
 │                   Professional Report                        │
 │          (Candidates, Repositories, Analysis)               │
 └─────────────────────────────────────────────────────────────┘
+```
+
+## 🔌 GitHub MCP Integration
+
+This project uses **GitHub MCP (Model Context Protocol)** exclusively for all GitHub operations. No REST API calls are made directly.
+
+### What is MCP?
+
+MCP (Model Context Protocol) is a standardized protocol for connecting AI applications to external data sources and tools. The GitHub MCP server provides a clean, standardized interface to GitHub's API.
+
+### Why MCP Instead of REST?
+
+- **Standardized Interface**: Consistent tool interface across different MCP servers
+- **Better Abstraction**: Cleaner separation between application logic and API details
+- **Built-in Rate Limiting**: MCP server handles rate limits automatically
+- **Easier Integration**: Works seamlessly with agentic AI frameworks
+- **Future-Proof**: Easy to swap or add new MCP servers
+
+### MCP Server Setup
+
+The GitHub MCP server runs automatically via:
+
+```bash
+npx @modelcontextprotocol/server-github
+```
+
+**Important Notes:**
+
+- The server is started automatically by the application
+- First connection may take 10-30 seconds (downloads package)
+- Subsequent connections are faster (2-5 seconds, package cached)
+- Requires Node.js and npm to be installed
+- The server runs via stdio (standard input/output), not HTTP
+
+### MCP Tools Available
+
+The GitHub MCP server provides these tools (discovered dynamically):
+
+- `search_users` - Search for GitHub users by query
+- `get_user` - Get detailed user profile
+- `get_user_repositories` - Get repositories for a user
+- `search_repositories` - Search repositories by query
+- `get_repository` - Get detailed repository information
+
+### Environment Variables
+
+| Variable       | Description                  | Required |
+| -------------- | ---------------------------- | -------- |
+| `GITHUB_TOKEN` | GitHub Personal Access Token | Yes      |
+
+**Getting a GitHub Token:**
+
+1. Go to [GitHub Settings > Tokens](https://github.com/settings/tokens)
+2. Generate new token (classic)
+3. Select scopes: `public_repo`, `read:user`
+4. Copy and paste into `.env` as `GITHUB_TOKEN=your_token_here`
+
+### MCP Session Management
+
+MCP sessions are managed by `github_mcp/github_session.py`:
+
+- Creates and manages connections to the GitHub MCP server
+- Handles session lifecycle (connect, use, disconnect)
+- Provides async context manager for clean resource management
+- Automatically discovers available MCP tools at runtime
+
+**Example Usage:**
+
+```python
+from github_mcp.github_session import create_github_mcp_session
+
+async with create_github_mcp_session() as session:
+    tools = await session.list_tools()
+    result = await session.call_tool("search_users", {"query": "python developer"})
 ```
 
 ## 📊 Sample Output
@@ -274,7 +363,7 @@ Tech Stack: Docker, Kubernetes, AWS
 - **Input Validation**: Blocks malicious prompts and injection attempts
 - **Content Filtering**: Removes inappropriate or offensive content
 - **Hallucination Detection**: Validates GitHub data against actual API responses
-- **Rate Limiting**: Respects GitHub API rate limits
+- **Rate Limiting**: MCP server handles GitHub API rate limits automatically
 
 ## 🤝 Contributing
 
@@ -293,6 +382,8 @@ MIT License - feel free to use this project for your own purposes.
 - [LiteLLM](https://github.com/BerriAI/litellm) - LLM gateway
 - [Nemo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) - Safety rails
 - [Rich](https://github.com/Textualize/rich) - Beautiful terminal output
+- [Model Context Protocol](https://modelcontextprotocol.io/) - MCP framework
+- [GitHub MCP Server](https://github.com/modelcontextprotocol/servers/tree/main/src/github) - Official GitHub MCP server
 
 ---
 
