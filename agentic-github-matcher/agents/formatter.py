@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 # AutoGen imports (pyautogen 0.2.x classic API)
-from autogen import ConversableAgent
+from autogen import ConversableAgent, UserProxyAgent
 
 # LiteLLM for model gateway
 import litellm
@@ -66,7 +66,11 @@ Make the report actionable and easy to scan quickly.
 class FormatterAgent:
     """
     The FormatterAgent converts analysis results and GitHub search data
-    into professional, formatted reports.
+    into professional, formatted reports using agentic behavior.
+    
+    This agent uses AutoGen's ConversableAgent to autonomously format reports
+    and generate summaries. The agent decides how to structure and present
+    the information for optimal readability.
     
     It supports multiple output formats:
     - Rich console output (colorful, tabular)
@@ -118,7 +122,7 @@ class FormatterAgent:
         else:
             print(f"  [FormatterAgent] ⚠ No API key found")
         
-        # Create the AutoGen agent
+        # Create the AutoGen agent for agentic behavior
         self.agent = ConversableAgent(
             name=name,
             system_message=FORMATTER_SYSTEM_PROMPT,
@@ -126,6 +130,8 @@ class FormatterAgent:
             human_input_mode="NEVER",
             max_consecutive_auto_reply=1,
         )
+        
+        print(f"  [FormatterAgent] ✓ Agentic behavior enabled - using AutoGen agent")
     
     def format_results(
         self,
@@ -476,7 +482,139 @@ class FormatterAgent:
     
     def generate_llm_summary(self, job_analysis: dict, search_results: dict) -> str:
         """
-        Use the LLM to generate a natural language summary of the results.
+        Use the agentic agent to generate a natural language summary of the results.
+        
+        This method uses the AutoGen agent to autonomously analyze the results
+        and generate a professional summary with recommendations.
+        
+        Args:
+            job_analysis: Dictionary from JobAnalysis.to_dict()
+            search_results: Dictionary from SearchResults.to_dict()
+            
+        Returns:
+            str: Natural language summary
+        """
+        prompt = f"""Based on the following job requirements and candidate search results, 
+provide a brief professional summary (2-3 paragraphs) with recommendations.
+
+JOB REQUIREMENTS:
+{json.dumps(job_analysis, indent=2)}
+
+SEARCH RESULTS:
+- Found {len(search_results.get('developers', []))} candidates
+- Found {search_results.get('total_repos_found', 0)} matching repositories
+
+TOP CANDIDATES:
+{json.dumps(search_results.get('developers', [])[:5], indent=2)}
+
+Please provide:
+1. A summary of how well the search matched the requirements
+2. Highlights of the top 2-3 candidates
+3. A recommendation for next steps
+"""
+
+        try:
+            print(f"  [FormatterAgent] 🤖 Generating summary using agentic behavior...")
+            
+            # Clear agent history for fresh start
+            self.agent.clear_history()
+            
+            # Create a user proxy agent to initiate conversation
+            user_proxy = UserProxyAgent(
+                name="user_proxy",
+                human_input_mode="NEVER",
+                max_consecutive_auto_reply=1,
+                code_execution_config=False,
+            )
+            
+            # Initiate chat - the agent will generate the summary
+            chat_result = user_proxy.initiate_chat(
+                recipient=self.agent,
+                message=prompt,
+                max_turns=1,
+                silent=False
+            )
+            
+            # Extract the agent's response from conversation history
+            agent_response = None
+            
+            # Method 1: Check user_proxy's chat_messages (most reliable)
+            if hasattr(user_proxy, 'chat_messages'):
+                if self.agent in user_proxy.chat_messages:
+                    messages = user_proxy.chat_messages[self.agent]
+                    for msg in reversed(messages):
+                        if isinstance(msg, dict):
+                            role = msg.get("role", "")
+                            content = msg.get("content", "")
+                            if role == "assistant" and content and content.strip():
+                                agent_response = content
+                                break
+            
+            # Method 2: Check agent's chat_messages
+            if not agent_response and hasattr(self.agent, 'chat_messages'):
+                if user_proxy in self.agent.chat_messages:
+                    messages = self.agent.chat_messages[user_proxy]
+                    for msg in reversed(messages):
+                        if isinstance(msg, dict):
+                            role = msg.get("role", "")
+                            content = msg.get("content", "")
+                            if role == "assistant" and content and content.strip():
+                                agent_response = content
+                                break
+            
+            # Method 3: Check _oai_messages
+            if not agent_response and hasattr(self.agent, '_oai_messages'):
+                if user_proxy in self.agent._oai_messages:
+                    messages = self.agent._oai_messages[user_proxy]
+                    for msg in reversed(messages):
+                        if isinstance(msg, dict):
+                            role = msg.get("role", "")
+                            content = msg.get("content", "")
+                            if role == "assistant" and content and content.strip():
+                                agent_response = content
+                                break
+            
+            # Method 4: Check chat_result.chat_history
+            if not agent_response and hasattr(chat_result, 'chat_history'):
+                for msg in reversed(chat_result.chat_history):
+                    if isinstance(msg, dict):
+                        role = msg.get("role", "")
+                        content = msg.get("content", "")
+                        if role == "assistant" and content and content.strip() and content != prompt:
+                            agent_response = content
+                            break
+            
+            # Method 5: Check user_proxy's _oai_messages
+            if not agent_response and hasattr(user_proxy, '_oai_messages'):
+                if self.agent in user_proxy._oai_messages:
+                    messages = user_proxy._oai_messages[self.agent]
+                    for msg in reversed(messages):
+                        if isinstance(msg, dict):
+                            role = msg.get("role", "")
+                            content = msg.get("content", "")
+                            if role == "assistant" and content and content.strip() and content != prompt:
+                                agent_response = content
+                                break
+            
+            # Validate we got a real response
+            if not agent_response or agent_response.strip() == prompt.strip():
+                raise ValueError("No valid response received from agent")
+            
+            if agent_response:
+                print(f"  [FormatterAgent] ✓ Summary generated successfully")
+                return agent_response.strip()
+            else:
+                raise ValueError("No response received from agent")
+            
+        except Exception as e:
+            print(f"  [FormatterAgent] ⚠ Agentic summary generation failed: {e}")
+            print(f"  [FormatterAgent] ⚠ Falling back to direct LLM call...")
+            # Fallback to direct LLM call
+            return self._fallback_generate_summary(job_analysis, search_results)
+    
+    def _fallback_generate_summary(self, job_analysis: dict, search_results: dict) -> str:
+        """
+        Fallback method using direct LLM call if agentic approach fails.
         
         Args:
             job_analysis: Dictionary from JobAnalysis.to_dict()

@@ -19,7 +19,7 @@ from typing import Optional
 from dataclasses import dataclass, field
 
 # AutoGen imports (pyautogen 0.2.x classic API)
-from autogen import ConversableAgent, AssistantAgent
+from autogen import ConversableAgent, UserProxyAgent
 
 # LiteLLM for model gateway
 import litellm
@@ -100,7 +100,8 @@ When given a job description, you must extract and return:
 10. **Domain Knowledge**: Industry-specific knowledge required
 11. **Summary**: A brief summary of the ideal candidate
 
-IMPORTANT: Return your analysis as a valid JSON object with these exact keys:
+CRITICAL: You MUST return ONLY a valid JSON object with these exact keys. Do not include any markdown formatting, code blocks, or explanatory text. Return ONLY the JSON:
+
 {
     "title": "string",
     "skills": ["list", "of", "skills"],
@@ -127,10 +128,11 @@ Be thorough but precise. Only extract information explicitly mentioned or strong
 class AnalystAgent:
     """
     The AnalystAgent analyzes job descriptions and extracts
-    structured skill and requirement information.
+    structured skill and requirement information using agentic behavior.
     
-    This agent uses AutoGen's ConversableAgent with LiteLLM
-    as the model gateway to process job descriptions.
+    This agent uses AutoGen's ConversableAgent with LiteLLM to autonomously
+    analyze job descriptions. The agent decides how to process the input
+    and format the structured output, demonstrating true agentic AI behavior.
     """
     
     def __init__(
@@ -161,6 +163,7 @@ class AnalystAgent:
                     "api_type": "openai",
                     "api_key": api_key,  # Explicitly pass API key
                     "temperature": temperature,
+                    "response_format": {"type": "json_object"},  # Force JSON response
                 }
             ],
             "timeout": 120,
@@ -175,7 +178,7 @@ class AnalystAgent:
         else:
             print(f"  [AnalystAgent] ⚠ No API key found in environment")
         
-        # Create the AutoGen agent
+        # Create the AutoGen agent for agentic behavior
         self.agent = ConversableAgent(
             name=name,
             system_message=ANALYST_SYSTEM_PROMPT,
@@ -183,10 +186,16 @@ class AnalystAgent:
             human_input_mode="NEVER",  # Fully automated
             max_consecutive_auto_reply=1,
         )
+        
+        print(f"  [AnalystAgent] ✓ Agentic behavior enabled - using AutoGen agent")
     
     def analyze(self, job_description: str) -> JobAnalysis:
         """
-        Analyze a job description and extract structured information.
+        Analyze a job description and extract structured information using agentic behavior.
+        
+        This method uses the AutoGen agent to autonomously analyze the job description
+        and extract structured information. The agent decides how to process the input
+        and format the output.
         
         Args:
             job_description: The raw job description text
@@ -194,7 +203,7 @@ class AnalystAgent:
         Returns:
             JobAnalysis: Structured analysis results
         """
-        # Prepare the analysis prompt
+        # Prepare the analysis prompt for the agent
         prompt = f"""Please analyze the following job description and extract all relevant information.
 
 JOB DESCRIPTION:
@@ -202,27 +211,188 @@ JOB DESCRIPTION:
 {job_description}
 ---
 
-Return your analysis as a JSON object."""
+Return your analysis as a valid JSON object with these exact keys:
+{{
+    "title": "string",
+    "skills": ["list", "of", "skills"],
+    "experience_years": number or null,
+    "experience_level": "junior|mid|senior|lead|principal",
+    "tech_stack": ["list", "of", "technologies"],
+    "frameworks": ["list", "of", "frameworks"],
+    "databases": ["list", "of", "databases"],
+    "cloud_platforms": ["list", "of", "platforms"],
+    "soft_skills": ["list", "of", "soft_skills"],
+    "certifications": ["list", "of", "certifications"],
+    "domain_knowledge": ["list", "of", "domains"],
+    "summary": "Brief summary of ideal candidate"
+}}
 
-        # Call LiteLLM directly for more control
+Be thorough but precise. Only extract information explicitly mentioned or strongly implied in the job description."""
+
         try:
-            print(f"  [AnalystAgent] Calling LLM with model: {self.model}")
-            response = litellm.completion(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": ANALYST_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=self.temperature,
-                response_format={"type": "json_object"}
+            print(f"  [AnalystAgent] 🤖 Starting agentic analysis with model: {self.model}")
+            
+            # Clear agent history for fresh start
+            self.agent.clear_history()
+            
+            # Create a user proxy agent to initiate conversation with the agent
+            # This enables agentic behavior where the agent processes the request
+            user_proxy = UserProxyAgent(
+                name="user_proxy",
+                human_input_mode="NEVER",
+                max_consecutive_auto_reply=1,
+                code_execution_config=False,  # Don't execute code, just use agent
             )
             
-            print(f"  [AnalystAgent] LLM response received")
-            # Parse the response
-            content = response.choices[0].message.content
+            # Initiate chat - the agent will analyze and respond
+            print(f"  [AnalystAgent] 🤖 Agent is analyzing job description...")
+            chat_result = user_proxy.initiate_chat(
+                recipient=self.agent,
+                message=prompt,
+                max_turns=1,  # Single turn for analysis
+                silent=False
+            )
+            
+            # Try to get response directly from chat_result first
+            agent_response = None
+            if hasattr(chat_result, 'summary'):
+                agent_response = chat_result.summary
+                print(f"  [AnalystAgent] Debug: Got response from chat_result.summary")
+            elif hasattr(chat_result, 'chat_history') and chat_result.chat_history:
+                # Get the last message which should be from the agent
+                last_msg = chat_result.chat_history[-1]
+                if isinstance(last_msg, dict):
+                    if last_msg.get("role") == "assistant" or last_msg.get("name") == self.agent.name:
+                        agent_response = last_msg.get("content", "")
+                        print(f"  [AnalystAgent] Debug: Got response from last message in chat_history")
+            
+            # If we didn't get it from chat_result, try other methods
+            if not agent_response:
+                # Method 1: Check user_proxy's chat_messages (most reliable)
+                if hasattr(user_proxy, 'chat_messages'):
+                    if self.agent in user_proxy.chat_messages:
+                        messages = user_proxy.chat_messages[self.agent]
+                        print(f"  [AnalystAgent] Debug: Found {len(messages)} messages in user_proxy.chat_messages")
+                        # Look for assistant messages (from the agent)
+                        for idx, msg in enumerate(reversed(messages)):  # Get most recent first
+                            if isinstance(msg, dict):
+                                role = msg.get("role", "")
+                                content = msg.get("content", "")
+                                name = msg.get("name", "")
+                                print(f"  [AnalystAgent] Debug: Message {idx}: role={role}, name={name}, content_len={len(str(content))}")
+                                # Skip user messages, get assistant messages
+                                if role == "assistant" and content and content.strip():
+                                    # Make sure it's not the prompt
+                                    if content.strip() != prompt.strip():
+                                        agent_response = content
+                                        print(f"  [AnalystAgent] Debug: Found assistant response (length: {len(agent_response)})")
+                                        break
+                
+                # Method 2: Check agent's chat_messages
+                if not agent_response and hasattr(self.agent, 'chat_messages'):
+                    if user_proxy in self.agent.chat_messages:
+                        messages = self.agent.chat_messages[user_proxy]
+                        print(f"  [AnalystAgent] Debug: Found {len(messages)} messages in agent.chat_messages")
+                        for idx, msg in enumerate(reversed(messages)):
+                            if isinstance(msg, dict):
+                                role = msg.get("role", "")
+                                content = msg.get("content", "")
+                                name = msg.get("name", "")
+                                print(f"  [AnalystAgent] Debug: Message {idx}: role={role}, name={name}, content_len={len(str(content))}")
+                                if role == "assistant" and content and content.strip():
+                                    if content.strip() != prompt.strip():
+                                        agent_response = content
+                                        print(f"  [AnalystAgent] Debug: Found assistant response from agent.chat_messages")
+                                        break
+                
+                # Method 3: Check _oai_messages (OpenAI format)
+                if not agent_response and hasattr(self.agent, '_oai_messages'):
+                    if user_proxy in self.agent._oai_messages:
+                        messages = self.agent._oai_messages[user_proxy]
+                        print(f"  [AnalystAgent] Debug: Found {len(messages)} messages in agent._oai_messages")
+                        for idx, msg in enumerate(reversed(messages)):
+                            if isinstance(msg, dict):
+                                role = msg.get("role", "")
+                                content = msg.get("content", "")
+                                if role == "assistant" and content and content.strip():
+                                    if content.strip() != prompt.strip():
+                                        agent_response = content
+                                        print(f"  [AnalystAgent] Debug: Found assistant response from _oai_messages")
+                                        break
+                
+                # Method 4: Check chat_result.chat_history
+                if not agent_response and hasattr(chat_result, 'chat_history'):
+                    print(f"  [AnalystAgent] Debug: Checking chat_result.chat_history ({len(chat_result.chat_history)} messages)")
+                    for idx, msg in enumerate(reversed(chat_result.chat_history)):
+                        if isinstance(msg, dict):
+                            role = msg.get("role", "")
+                            content = msg.get("content", "")
+                            print(f"  [AnalystAgent] Debug: chat_history[{idx}]: role={role}, content_len={len(str(content))}")
+                            if role == "assistant" and content and content.strip() and content.strip() != prompt.strip():
+                                agent_response = content
+                                print(f"  [AnalystAgent] Debug: Found assistant response from chat_history")
+                                break
+                
+                # Method 5: Check user_proxy's _oai_messages
+                if not agent_response and hasattr(user_proxy, '_oai_messages'):
+                    if self.agent in user_proxy._oai_messages:
+                        messages = user_proxy._oai_messages[self.agent]
+                        print(f"  [AnalystAgent] Debug: Found {len(messages)} messages in user_proxy._oai_messages")
+                        for idx, msg in enumerate(reversed(messages)):
+                            if isinstance(msg, dict):
+                                role = msg.get("role", "")
+                                content = msg.get("content", "")
+                                if role == "assistant" and content and content.strip() and content.strip() != prompt.strip():
+                                    agent_response = content
+                                    print(f"  [AnalystAgent] Debug: Found assistant response from user_proxy._oai_messages")
+                                    break
+            
+            # Validate we got a real response (not the prompt)
+            if not agent_response or agent_response.strip() == prompt.strip():
+                print(f"  [AnalystAgent] ⚠ Warning: Could not extract agent response or got prompt back")
+                print(f"  [AnalystAgent] Debug: agent_response is None: {agent_response is None}")
+                if agent_response:
+                    print(f"  [AnalystAgent] Debug: agent_response matches prompt: {agent_response.strip() == prompt.strip()}")
+                    print(f"  [AnalystAgent] Debug: agent_response preview: {agent_response[:100] if len(agent_response) > 100 else agent_response}")
+                # Debug: print what we found
+                if hasattr(user_proxy, 'chat_messages'):
+                    print(f"  [AnalystAgent] Debug: user_proxy.chat_messages keys: {list(user_proxy.chat_messages.keys())}")
+                    if self.agent in user_proxy.chat_messages:
+                        msgs = user_proxy.chat_messages[self.agent]
+                        print(f"  [AnalystAgent] Debug: Messages from agent: {len(msgs)}")
+                        for i, m in enumerate(msgs):
+                            if isinstance(m, dict):
+                                print(f"    [{i}] role={m.get('role')}, name={m.get('name')}, content_preview={str(m.get('content', ''))[:50]}")
+                if hasattr(self.agent, 'chat_messages'):
+                    print(f"  [AnalystAgent] Debug: agent.chat_messages keys: {list(self.agent.chat_messages.keys())}")
+                    if user_proxy in self.agent.chat_messages:
+                        msgs = self.agent.chat_messages[user_proxy]
+                        print(f"  [AnalystAgent] Debug: Messages from user_proxy: {len(msgs)}")
+                        for i, m in enumerate(msgs):
+                            if isinstance(m, dict):
+                                print(f"    [{i}] role={m.get('role')}, name={m.get('name')}, content_preview={str(m.get('content', ''))[:50]}")
+                raise ValueError("No valid response received from agent (got prompt or empty response)")
+            
+            print(f"  [AnalystAgent] ✓ Agent response received")
+            
+            # Extract JSON from response (may contain markdown code blocks or plain JSON)
+            content = agent_response.strip()
+            
+            # Remove markdown code blocks if present
+            if content.startswith("```json"):
+                content = content[7:]  # Remove ```json
+            elif content.startswith("```"):
+                content = content[3:]  # Remove ```
+            
+            if content.endswith("```"):
+                content = content[:-3]  # Remove closing ```
+            
+            content = content.strip()
+            
+            # Parse JSON response
             print(f"  [AnalystAgent] Parsing JSON response...")
             data = json.loads(content)
-            print(f"  [AnalystAgent] Successfully extracted: {len(data.get('skills', []))} skills")
+            print(f"  [AnalystAgent] ✓ Successfully extracted: {len(data.get('skills', []))} skills")
             
             # Create JobAnalysis object
             return JobAnalysis(
@@ -242,18 +412,21 @@ Return your analysis as a JSON object."""
             
         except json.JSONDecodeError as e:
             print(f"  [AnalystAgent] ❌ Error parsing JSON response: {e}")
-            print(f"  [AnalystAgent] Response content: {content[:200] if 'content' in locals() else 'N/A'}")
-            # Return empty analysis on error
-            return JobAnalysis(summary=f"Error analyzing job description: {e}")
+            print(f"  [AnalystAgent] Response content: {agent_response[:200] if 'agent_response' in locals() else 'N/A'}")
+            # Fallback to direct LLM call if agentic approach fails
+            print(f"  [AnalystAgent] ⚠ Falling back to direct LLM call...")
+            return self._fallback_analyze(job_description)
         except Exception as e:
             import traceback
-            print(f"  [AnalystAgent] ❌ Error during analysis: {e}")
+            print(f"  [AnalystAgent] ❌ Error during agentic analysis: {e}")
             print(f"  [AnalystAgent] Traceback: {traceback.format_exc()}")
-            return JobAnalysis(summary=f"Error analyzing job description: {e}")
+            # Fallback to direct LLM call
+            print(f"  [AnalystAgent] ⚠ Falling back to direct LLM call...")
+            return self._fallback_analyze(job_description)
     
-    async def analyze_async(self, job_description: str) -> JobAnalysis:
+    def _fallback_analyze(self, job_description: str) -> JobAnalysis:
         """
-        Async version of analyze method.
+        Fallback method using direct LLM call if agentic approach fails.
         
         Args:
             job_description: The raw job description text
@@ -271,7 +444,7 @@ JOB DESCRIPTION:
 Return your analysis as a JSON object."""
 
         try:
-            response = await litellm.acompletion(
+            response = litellm.completion(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": ANALYST_SYSTEM_PROMPT},
@@ -298,10 +471,23 @@ Return your analysis as a JSON object."""
                 domain_knowledge=data.get("domain_knowledge", []),
                 summary=data.get("summary", "")
             )
-            
         except Exception as e:
-            print(f"Error during async analysis: {e}")
+            print(f"  [AnalystAgent] ❌ Fallback analysis also failed: {e}")
             return JobAnalysis(summary=f"Error analyzing job description: {e}")
+    
+    async def analyze_async(self, job_description: str) -> JobAnalysis:
+        """
+        Async version of analyze method (delegates to sync version for now).
+        
+        Args:
+            job_description: The raw job description text
+            
+        Returns:
+            JobAnalysis: Structured analysis results
+        """
+        # For now, delegate to sync version
+        # AutoGen's initiate_chat is sync, so we use the sync analyze method
+        return self.analyze(job_description)
 
 
 # ==============================================
