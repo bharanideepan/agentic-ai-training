@@ -306,22 +306,21 @@ async def process_workflow_stream(
             }
         )
         
-        # Step 4: Format results
-        yield create_chunk("status", "Formatting results...", 85)
+        # Step 4: Format results using agentic behavior
+        yield create_chunk("status", "Formatting results with AI insights...", 85)
         
         results_dict = search_results_final.to_dict()
         
-        # Format output based on requested format
-        if output_format == "json":
-            formatted_output = json.dumps(results_dict, indent=2)
-        else:
-            formatted_output = current_workflow.formatter.format_results(
-                analysis_dict,
-                results_dict,
-                output_format=output_format
-            )
+        # Always use FormatterAgent for all formats (including JSON) to ensure agentic behavior
+        formatted_output = current_workflow.formatter.format_results(
+            analysis_dict,
+            results_dict,
+            output_format=output_format
+        )
         
         # Send final result with strategy info
+        # For JSON format, formatted_output contains the complete agentic JSON with AI-generated insights
+        # For other formats, formatted_output contains the formatted string
         yield create_chunk(
             "result",
             "Analysis complete!",
@@ -329,7 +328,7 @@ async def process_workflow_stream(
             {
                 "analysis": analysis_dict,
                 "results": results_dict,
-                "formatted_output": formatted_output if output_format != "json" else None,
+                "formatted_output": formatted_output,  # Always include formatted output (agentic for all formats)
                 "strategy": github_strategy,
                 "search_method": "direct"
             }

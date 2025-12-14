@@ -140,7 +140,10 @@ class FormatterAgent:
         output_format: str = "rich"
     ) -> str:
         """
-        Format the combined results into a professional report.
+        Format the combined results into a professional report using agentic behavior.
+        
+        This method uses the AutoGen agent to intelligently structure and format reports,
+        generating professional summaries, insights, and recommendations.
         
         Args:
             job_analysis: Dictionary from JobAnalysis.to_dict()
@@ -153,11 +156,11 @@ class FormatterAgent:
         if output_format == "rich":
             return self._format_rich(job_analysis, search_results)
         elif output_format == "markdown":
-            return self._format_markdown(job_analysis, search_results)
+            return self._format_markdown_agentic(job_analysis, search_results)
         elif output_format == "json":
             return self._format_json(job_analysis, search_results)
         else:
-            return self._format_text(job_analysis, search_results)
+            return self._format_text_agentic(job_analysis, search_results)
     
     def _format_rich(self, job_analysis: dict, search_results: dict) -> str:
         """
@@ -261,22 +264,40 @@ class FormatterAgent:
             
             self.console.print(repo_table)
         
-        # Summary Statistics
+        # Summary Statistics with AI-generated insights
         self.console.print()
-        self.console.print(Panel(
-            f"[bold]Summary:[/bold] Found [green]{len(developers)}[/green] candidates "
-            f"and [green]{search_results.get('total_repos_found', 0):,}[/green] repositories "
-            f"matching the job requirements.",
-            title="📊 Results Summary",
-            border_style="green"
-        ))
+        try:
+            print(f"  [FormatterAgent] 🤖 Generating insights summary using agentic behavior...")
+            insights_summary = self.generate_llm_summary(job_analysis, search_results)
+            # Truncate for panel display
+            summary_text = insights_summary[:200] + "..." if len(insights_summary) > 200 else insights_summary
+            self.console.print(Panel(
+                f"[bold]AI-Generated Insights:[/bold]\n\n{summary_text}\n\n"
+                f"[bold]Summary:[/bold] Found [green]{len(developers)}[/green] candidates "
+                f"and [green]{search_results.get('total_repos_found', 0):,}[/green] repositories "
+                f"matching the job requirements.",
+                title="📊 Results Summary & Insights",
+                border_style="green"
+            ))
+        except Exception as e:
+            print(f"  [FormatterAgent] ⚠ Could not generate agentic insights: {e}")
+            # Fallback to simple summary
+            self.console.print(Panel(
+                f"[bold]Summary:[/bold] Found [green]{len(developers)}[/green] candidates "
+                f"and [green]{search_results.get('total_repos_found', 0):,}[/green] repositories "
+                f"matching the job requirements.",
+                title="📊 Results Summary",
+                border_style="green"
+            ))
         
         # Generate text version for return
-        return self._format_text(job_analysis, search_results)
+        return self._format_text_agentic(job_analysis, search_results)
     
-    def _format_markdown(self, job_analysis: dict, search_results: dict) -> str:
+    def _format_markdown_agentic(self, job_analysis: dict, search_results: dict) -> str:
         """
-        Format results as Markdown.
+        Format results as Markdown using agentic behavior for intelligent formatting.
+        
+        Uses the AutoGen agent to generate professional summaries, insights, and recommendations.
         """
         lines = []
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -284,12 +305,21 @@ class FormatterAgent:
         lines.append("# 🎯 GitHub Talent Matcher Report")
         lines.append(f"\n*Generated: {timestamp}*\n")
         
-        # Executive Summary
-        lines.append("## 📝 Executive Summary\n")
-        developers = search_results.get("developers", [])
-        repos = search_results.get("repositories", [])
-        lines.append(f"This report identifies **{len(developers)} potential candidates** "
-                    f"and **{len(repos)} relevant repositories** based on the job requirements.\n")
+        # Use agentic behavior to generate executive summary
+        try:
+            print(f"  [FormatterAgent] 🤖 Generating executive summary using agentic behavior...")
+            executive_summary = self.generate_llm_summary(job_analysis, search_results)
+            lines.append("## 📝 Executive Summary\n")
+            lines.append(executive_summary)
+            lines.append("")
+        except Exception as e:
+            print(f"  [FormatterAgent] ⚠ Could not generate agentic summary: {e}")
+            # Fallback to simple summary
+            developers = search_results.get("developers", [])
+            repos = search_results.get("repositories", [])
+            lines.append("## 📝 Executive Summary\n")
+            lines.append(f"This report identifies **{len(developers)} potential candidates** "
+                        f"and **{len(repos)} relevant repositories** based on the job requirements.\n")
         
         # Job Requirements
         lines.append("## 📋 Job Requirements Analysis\n")
@@ -320,6 +350,8 @@ class FormatterAgent:
         # Matched Candidates
         lines.append("## 👥 Matched Candidates\n")
         
+        # Get and sort developers
+        developers = search_results.get("developers", [])
         # Ensure candidates are sorted by relevance score (descending)
         developers = sorted(
             developers, 
@@ -341,6 +373,17 @@ class FormatterAgent:
                 lines.append(f"| {idx} | [@{username}]({url}) | {followers:,} | {repos_count} | {score:.0f} |")
             
             lines.append("")
+            
+            # Use agentic behavior to generate candidate highlights
+            try:
+                print(f"  [FormatterAgent] 🤖 Generating candidate highlights using agentic behavior...")
+                candidate_highlights = self._generate_candidate_highlights(job_analysis, developers[:5])
+                if candidate_highlights:
+                    lines.append("### 🌟 Top Candidate Highlights\n")
+                    lines.append(candidate_highlights)
+                    lines.append("")
+            except Exception as e:
+                print(f"  [FormatterAgent] ⚠ Could not generate candidate highlights: {e}")
             
             # Detailed profiles
             lines.append("### Candidate Details\n")
@@ -382,15 +425,28 @@ class FormatterAgent:
             
             lines.append("")
         
+        # Add recommendations section using agentic behavior
+        try:
+            print(f"  [FormatterAgent] 🤖 Generating recommendations using agentic behavior...")
+            recommendations = self._generate_recommendations(job_analysis, search_results)
+            if recommendations:
+                lines.append("## 💡 Recommendations\n")
+                lines.append(recommendations)
+                lines.append("")
+        except Exception as e:
+            print(f"  [FormatterAgent] ⚠ Could not generate recommendations: {e}")
+        
         # Footer
         lines.append("---")
         lines.append("*Report generated by GitHub Talent Matcher - Agentic AI Workflow*")
         
         return "\n".join(lines)
     
-    def _format_text(self, job_analysis: dict, search_results: dict) -> str:
+    def _format_text_agentic(self, job_analysis: dict, search_results: dict) -> str:
         """
-        Format results as plain text.
+        Format results as plain text using agentic behavior for narrative summaries.
+        
+        Uses the AutoGen agent to generate professional text-based reports with insights.
         """
         lines = []
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -399,6 +455,18 @@ class FormatterAgent:
         lines.append("        GITHUB TALENT MATCHER REPORT")
         lines.append(f"        Generated: {timestamp}")
         lines.append("=" * 60)
+        
+        # Use agentic behavior to generate executive summary
+        try:
+            print(f"  [FormatterAgent] 🤖 Generating narrative summary using agentic behavior...")
+            executive_summary = self.generate_llm_summary(job_analysis, search_results)
+            lines.append("\nEXECUTIVE SUMMARY")
+            lines.append("-" * 60)
+            lines.append(executive_summary)
+            lines.append("")
+        except Exception as e:
+            print(f"  [FormatterAgent] ⚠ Could not generate agentic summary: {e}")
+            # Continue with deterministic formatting
         
         # Job Analysis
         lines.append("\nJOB REQUIREMENTS ANALYSIS")
@@ -454,13 +522,27 @@ class FormatterAgent:
             lines.append(f"  Stars: {repo.get('stars', 0):,} | Forks: {repo.get('forks', 0):,}")
             lines.append(f"  Language: {repo.get('language', 'N/A')}")
         
+        # Add recommendations using agentic behavior
+        try:
+            print(f"  [FormatterAgent] 🤖 Generating recommendations using agentic behavior...")
+            recommendations = self._generate_recommendations(job_analysis, search_results)
+            if recommendations:
+                lines.append("\n\nRECOMMENDATIONS")
+                lines.append("-" * 40)
+                lines.append(recommendations)
+        except Exception as e:
+            print(f"  [FormatterAgent] ⚠ Could not generate recommendations: {e}")
+        
         lines.append("\n" + "=" * 60)
         
         return "\n".join(lines)
     
     def _format_json(self, job_analysis: dict, search_results: dict) -> str:
         """
-        Format results as JSON.
+        Format results as JSON using agentic behavior for intelligent insights.
+        
+        Uses the AutoGen agent to generate professional summaries, insights, and recommendations
+        that are included in the structured JSON response.
         """
         output = {
             "report_type": "github_talent_matcher",
@@ -468,6 +550,48 @@ class FormatterAgent:
             "job_analysis": job_analysis,
             "search_results": search_results
         }
+        
+        # Add AI-generated content using agentic behavior
+        try:
+            print(f"  [FormatterAgent] 🤖 Generating executive summary using agentic behavior...")
+            executive_summary = self.generate_llm_summary(job_analysis, search_results)
+            output["executive_summary"] = executive_summary
+        except Exception as e:
+            print(f"  [FormatterAgent] ⚠ Could not generate agentic summary: {e}")
+            # Fallback to simple summary
+            developers = search_results.get("developers", [])
+            repos = search_results.get("repositories", [])
+            output["executive_summary"] = (
+                f"This report identifies {len(developers)} potential candidates "
+                f"and {len(repos)} relevant repositories based on the job requirements."
+            )
+        
+        # Generate candidate highlights for top candidates
+        try:
+            developers = search_results.get("developers", [])
+            top_candidates = sorted(
+                developers,
+                key=lambda d: d.get("relevance_score", 0),
+                reverse=True
+            )[:5]
+            
+            if top_candidates:
+                print(f"  [FormatterAgent] 🤖 Generating candidate highlights using agentic behavior...")
+                candidate_highlights = self._generate_candidate_highlights(job_analysis, top_candidates)
+                if candidate_highlights:
+                    output["candidate_highlights"] = candidate_highlights
+        except Exception as e:
+            print(f"  [FormatterAgent] ⚠ Could not generate candidate highlights: {e}")
+        
+        # Generate recommendations
+        try:
+            print(f"  [FormatterAgent] 🤖 Generating recommendations using agentic behavior...")
+            recommendations = self._generate_recommendations(job_analysis, search_results)
+            if recommendations:
+                output["recommendations"] = recommendations
+        except Exception as e:
+            print(f"  [FormatterAgent] ⚠ Could not generate recommendations: {e}")
+        
         return json.dumps(output, indent=2)
     
     def print_report(self, job_analysis: dict, search_results: dict) -> None:
@@ -611,6 +735,163 @@ Please provide:
             print(f"  [FormatterAgent] ⚠ Falling back to direct LLM call...")
             # Fallback to direct LLM call
             return self._fallback_generate_summary(job_analysis, search_results)
+    
+    def _generate_candidate_highlights(self, job_analysis: dict, top_candidates: list) -> str:
+        """
+        Use agentic behavior to generate highlights for top candidates.
+        
+        Args:
+            job_analysis: Dictionary from JobAnalysis.to_dict()
+            top_candidates: List of top candidate dictionaries
+            
+        Returns:
+            str: Formatted candidate highlights
+        """
+        if not top_candidates:
+            return ""
+        
+        prompt = f"""Based on the job requirements and these top candidates, provide a brief highlight (1-2 sentences per candidate) explaining why each candidate is a strong match.
+
+JOB REQUIREMENTS:
+{json.dumps(job_analysis, indent=2)}
+
+TOP CANDIDATES:
+{json.dumps(top_candidates, indent=2)}
+
+Provide highlights in markdown format with bullet points, one per candidate. Be specific about their strengths and relevance to the role.
+"""
+
+        try:
+            # Clear agent history
+            self.agent.clear_history()
+            
+            user_proxy = UserProxyAgent(
+                name="user_proxy",
+                human_input_mode="NEVER",
+                max_consecutive_auto_reply=1,
+                code_execution_config=False,
+            )
+            
+            chat_result = user_proxy.initiate_chat(
+                recipient=self.agent,
+                message=prompt,
+                max_turns=1,
+                silent=False
+            )
+            
+            # Extract response
+            agent_response = None
+            
+            if hasattr(user_proxy, 'chat_messages'):
+                if self.agent in user_proxy.chat_messages:
+                    messages = user_proxy.chat_messages[self.agent]
+                    for msg in reversed(messages):
+                        if isinstance(msg, dict):
+                            role = msg.get("role", "")
+                            content = msg.get("content", "")
+                            if role == "assistant" and content and content.strip():
+                                agent_response = content
+                                break
+            
+            if not agent_response and hasattr(self.agent, 'chat_messages'):
+                if user_proxy in self.agent.chat_messages:
+                    messages = self.agent.chat_messages[user_proxy]
+                    for msg in reversed(messages):
+                        if isinstance(msg, dict):
+                            role = msg.get("role", "")
+                            content = msg.get("content", "")
+                            if role == "assistant" and content and content.strip():
+                                agent_response = content
+                                break
+            
+            if agent_response and agent_response.strip() != prompt.strip():
+                return agent_response.strip()
+            
+        except Exception as e:
+            print(f"  [FormatterAgent] ⚠ Could not generate candidate highlights: {e}")
+        
+        return ""
+    
+    def _generate_recommendations(self, job_analysis: dict, search_results: dict) -> str:
+        """
+        Use agentic behavior to generate actionable recommendations.
+        
+        Args:
+            job_analysis: Dictionary from JobAnalysis.to_dict()
+            search_results: Dictionary from SearchResults.to_dict()
+            
+        Returns:
+            str: Formatted recommendations
+        """
+        prompt = f"""Based on the job requirements and search results, provide actionable recommendations for next steps in the hiring process.
+
+JOB REQUIREMENTS:
+{json.dumps(job_analysis, indent=2)}
+
+SEARCH RESULTS:
+- Found {len(search_results.get('developers', []))} candidates
+- Found {search_results.get('total_repos_found', 0)} matching repositories
+
+TOP CANDIDATES:
+{json.dumps(search_results.get('developers', [])[:5], indent=2)}
+
+Provide 3-5 specific, actionable recommendations in markdown format with bullet points. Focus on:
+1. Which candidates to prioritize
+2. What to look for in interviews
+3. Any skill gaps to address
+4. Next steps in the hiring process
+"""
+
+        try:
+            # Clear agent history
+            self.agent.clear_history()
+            
+            user_proxy = UserProxyAgent(
+                name="user_proxy",
+                human_input_mode="NEVER",
+                max_consecutive_auto_reply=1,
+                code_execution_config=False,
+            )
+            
+            chat_result = user_proxy.initiate_chat(
+                recipient=self.agent,
+                message=prompt,
+                max_turns=1,
+                silent=False
+            )
+            
+            # Extract response
+            agent_response = None
+            
+            if hasattr(user_proxy, 'chat_messages'):
+                if self.agent in user_proxy.chat_messages:
+                    messages = user_proxy.chat_messages[self.agent]
+                    for msg in reversed(messages):
+                        if isinstance(msg, dict):
+                            role = msg.get("role", "")
+                            content = msg.get("content", "")
+                            if role == "assistant" and content and content.strip():
+                                agent_response = content
+                                break
+            
+            if not agent_response and hasattr(self.agent, 'chat_messages'):
+                if user_proxy in self.agent.chat_messages:
+                    messages = self.agent.chat_messages[user_proxy]
+                    for msg in reversed(messages):
+                        if isinstance(msg, dict):
+                            role = msg.get("role", "")
+                            content = msg.get("content", "")
+                            if role == "assistant" and content and content.strip():
+                                agent_response = content
+                                break
+            
+            if agent_response and agent_response.strip() != prompt.strip():
+                return agent_response.strip()
+            
+        except Exception as e:
+            print(f"  [FormatterAgent] ⚠ Could not generate recommendations: {e}")
+        
+        return ""
     
     def _fallback_generate_summary(self, job_analysis: dict, search_results: dict) -> str:
         """
