@@ -1,0 +1,15 @@
+# ==============================================
+# NeMo Guardrails - Main Configuration
+# ==============================================
+# Points to rails.yaml and flows.co
+# Uses default LLM configuration (LiteLLM handles models)
+
+# Path to rails configuration
+rails_config: rails.yaml
+
+# Path to flows configuration
+flows_config: flows.co
+
+# LLM configuration (LiteLLM handles models)
+# No need to specify model details here as LiteLLM gateway is used
+

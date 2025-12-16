@@ -45,8 +45,6 @@ from agents.analyst import AnalystAgent, create_analyst_agent
 from agents.github_agent import GitHubSearchAgent, create_github_agent
 from agents.formatter import FormatterAgent, create_formatter_agent
 
-# Configuration
-from config import get_config
 
 # LiteLLM for model gateway
 import litellm
@@ -102,153 +100,83 @@ def initialize_guardrails():
     """
     Initialize Nemo Guardrails for input/output safety.
     
-    Note: This function sets up guardrails configuration.
-    In production, this would load and configure the rails.yaml file.
+    This function is kept for backward compatibility but guardrails
+    are now initialized automatically in guardrails/runner.py.
     """
     try:
-        from nemoguardrails import LLMRails, RailsConfig
-        
-        config_path = Path(__file__).parent / "guardrails"
-        
-        if config_path.exists():
-            config = RailsConfig.from_path(str(config_path))
-            rails = LLMRails(config)
+        # Import to trigger initialization
+        from guardrails.runner import _initialize_guardrails
+        rails = _initialize_guardrails()
+        if rails:
             console.print("[green]✓[/green] Guardrails initialized successfully")
-            return rails
         else:
-            console.print("[yellow]⚠[/yellow] Guardrails config not found, running without safety rails")
-            return None
-            
-    except ImportError:
-        console.print("[yellow]⚠[/yellow] Nemo Guardrails not installed, running without safety rails")
-        return None
+            console.print("[yellow]⚠[/yellow] Guardrails not available, using basic validation")
+        return rails
     except Exception as e:
         console.print(f"[yellow]⚠[/yellow] Guardrails initialization failed: {e}")
+        console.print("[dim]  Continuing with basic validation only[/dim]")
         return None
 
 
-def detect_and_mask_pii(text: str) -> tuple[str, list[str]]:
-    """
-    Detect and mask PII (Personally Identifiable Information) in text.
-    
-    Detects:
-    - Email addresses
-    - Phone numbers (US format)
-    - Credit card numbers
-    - SSN (Social Security Numbers)
-    - IP addresses
-    - API keys (common patterns)
-    
-    Args:
-        text: Input text to scan
-        
-    Returns:
-        tuple: (masked_text, detected_pii_types)
-    """
-    import re
-    
-    detected_types = []
-    masked_text = text
-    
-    # Email addresses
-    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-    if re.search(email_pattern, masked_text):
-        detected_types.append("email")
-        masked_text = re.sub(email_pattern, '[EMAIL_REDACTED]', masked_text)
-    
-    # Phone numbers (US format: (123) 456-7890, 123-456-7890, 123.456.7890, etc.)
-    phone_pattern = r'(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}'
-    if re.search(phone_pattern, masked_text):
-        detected_types.append("phone")
-        masked_text = re.sub(phone_pattern, '[PHONE_REDACTED]', masked_text)
-    
-    # Credit card numbers (13-19 digits, with optional spaces/dashes)
-    cc_pattern = r'\b(?:\d[ -]*?){13,19}\b'
-    # Additional validation: check if it looks like a credit card
-    cc_matches = re.finditer(cc_pattern, masked_text)
-    for match in cc_matches:
-        digits = re.sub(r'[^\d]', '', match.group())
-        if 13 <= len(digits) <= 19:
-            detected_types.append("credit_card")
-            masked_text = masked_text[:match.start()] + '[CREDIT_CARD_REDACTED]' + masked_text[match.end():]
-            break
-    
-    # SSN (Social Security Number: XXX-XX-XXXX)
-    ssn_pattern = r'\b\d{3}-\d{2}-\d{4}\b'
-    if re.search(ssn_pattern, masked_text):
-        detected_types.append("ssn")
-        masked_text = re.sub(ssn_pattern, '[SSN_REDACTED]', masked_text)
-    
-    # IP addresses (IPv4)
-    ip_pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'
-    if re.search(ip_pattern, masked_text):
-        detected_types.append("ip_address")
-        masked_text = re.sub(ip_pattern, '[IP_REDACTED]', masked_text)
-    
-    # API keys (common patterns: sk-, xoxb-, etc.)
-    api_key_patterns = [
-        r'\bsk-[a-zA-Z0-9]{32,}\b',  # OpenAI, Stripe
-        r'\bxoxb-[a-zA-Z0-9-]+\b',   # Slack
-        r'\bghp_[a-zA-Z0-9]{36}\b',  # GitHub
-        r'\bAKIA[0-9A-Z]{16}\b',     # AWS Access Key
-    ]
-    for pattern in api_key_patterns:
-        if re.search(pattern, masked_text, re.IGNORECASE):
-            detected_types.append("api_key")
-            masked_text = re.sub(pattern, '[API_KEY_REDACTED]', masked_text, flags=re.IGNORECASE)
-    
-    return masked_text, detected_types
-
-
-def apply_input_guardrails(rails, text: str) -> tuple[bool, str]:
+async def apply_input_guardrails(rails, text: str) -> tuple[bool, str]:
     """
     Apply input guardrails to validate user input.
     
-    Performs:
-    1. PII Detection & Masking - Detects and masks sensitive information
-    2. Pattern-based validation - Blocks malicious/jailbreak patterns
+    Uses guardrails/runner.py for validation.
     
     Args:
-        rails: Initialized guardrails instance (optional, for future LLM-based validation)
+        rails: Not used (kept for backward compatibility)
         text: Input text to validate
         
     Returns:
-        tuple: (is_safe, sanitized_message)
+        tuple: (is_safe, validated_message)
     """
     try:
-        # Get configuration
-        config = get_config()
+        from guardrails.runner import validate_input, GuardrailsValidationError
         
-        # Step 1: Detect and mask PII (if enabled)
-        if config.guardrails.pii_detection_enabled:
-            masked_text, detected_pii = detect_and_mask_pii(text)
-            
-            if detected_pii:
-                if config.guardrails.pii_mask_mode == "block":
-                    return False, f"Input blocked: PII detected ({', '.join(detected_pii)})"
-                else:
-                    console.print(f"[yellow]⚠ PII detected and masked: {', '.join(detected_pii)}[/yellow]")
-        else:
-            masked_text = text
-            detected_pii = []
+        # Validate input using guardrails (async)
+        validated_text = await validate_input(text)
+        return True, validated_text
         
-        # Step 2: Get blocked patterns from configuration
-        blocked_patterns = config.guardrails.blocked_patterns
-        
-        # Step 3: Apply pattern-based validation on masked text
-        text_lower = masked_text.lower()
-        for pattern in blocked_patterns:
-            if pattern in text_lower:
-                return False, f"Input blocked: contains restricted pattern '{pattern}'"
-        
-        # In a full implementation, this would also use rails.generate() for LLM-based validation
-        # For now, we do basic pattern-based validation with PII masking
-        
-        return True, masked_text
-        
+    except GuardrailsValidationError as e:
+        # Validation failed - return error message
+        return False, str(e)
     except Exception as e:
-        console.print(f"[yellow]Guardrails check warning: {e}[/yellow]")
+        # For other errors, log but allow (fail open for safety)
+        console.print(f"[yellow]⚠ Guardrails check warning: {e}[/yellow]")
         return True, text
+
+
+async def apply_output_guardrails(rails, output: str, context: str = "") -> tuple[bool, str]:
+    """
+    Apply output guardrails to validate agent responses.
+    
+    Uses guardrails/runner.py for validation.
+    
+    Args:
+        rails: Not used (kept for backward compatibility)
+        output: Agent output to validate
+        context: Optional context (not used, kept for compatibility)
+        
+    Returns:
+        tuple: (is_safe, validated_output)
+    """
+    try:
+        from guardrails.runner import validate_output, GuardrailsValidationError
+        
+        # Validate output using guardrails (async)
+        validated_output = await validate_output(output)
+        return True, validated_output
+        
+    except GuardrailsValidationError as e:
+        # Validation failed - return error message
+        console.print(f"[yellow]⚠ Output validation failed: {e}[/yellow]")
+        return False, str(e)
+    except Exception as e:
+        # For other errors, log but allow (fail open for safety)
+        console.print(f"[yellow]⚠ Output guardrails validation failed: {e}[/yellow]")
+        console.print("[dim]Allowing output (fail open)[/dim]")
+        return True, output
 
 
 # ==============================================
@@ -334,13 +262,13 @@ class AgenticWorkflow:
         Returns:
             str: Formatted results
         """
-        # Step 0: Apply input guardrails
+        # Step 0: Apply input guardrails (before AnalystAgent)
         console.print(Panel("[bold]Starting Agentic Workflow[/bold]", border_style="blue"))
         
-        is_safe, message = apply_input_guardrails(self.guardrails, job_description)
+        is_safe, message = await apply_input_guardrails(self.guardrails, job_description)
         if not is_safe:
-            console.print(f"[red]❌ {message}[/red]")
-            return message
+            console.print(f"[red]❌ Input validation failed: {message}[/red]")
+            raise ValueError(f"Input validation failed: {message}")
         
         # Step 1: Analyze the job description
         console.print("\n[bold cyan]Step 1/3:[/bold cyan] Analyzing Job Description...")
@@ -409,6 +337,21 @@ class AgenticWorkflow:
                 results_dict,
                 output_format=output_format
             )
+            
+            # Apply output guardrails to formatted output (after FormatterAgent)
+            if formatted_output:
+                is_safe, validated_output = await apply_output_guardrails(
+                    self.guardrails,
+                    formatted_output,
+                    context="Formatted job matching report"
+                )
+                if not is_safe:
+                    console.print(f"  [yellow]⚠ Formatted output flagged by guardrails[/yellow]")
+                    # Raise exception to prevent unsafe output
+                    raise ValueError(f"Output validation failed: {validated_output}")
+                else:
+                    formatted_output = validated_output
+            
             progress.update(task, description="Report ready!")
         
         # Display results (for rich format, this prints to console)

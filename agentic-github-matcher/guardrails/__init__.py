@@ -1,13 +1,20 @@
-# Guardrails Package Initialization
-# ==================================
-# This package contains Nemo Guardrails configuration.
+"""
+NeMo Guardrails Module
+======================
 
-from pathlib import Path
+This module provides input and output validation using NeMo Guardrails.
 
-# Path to the rails configuration file
-RAILS_CONFIG_PATH = Path(__file__).parent / "rails.yaml"
+DO NOT use for:
+- Tool calls
+- GitHub MCP
+- Agent reasoning
+- Network or security layers
 
-def get_rails_config_path() -> Path:
-    """Get the path to the rails configuration file."""
-    return RAILS_CONFIG_PATH
+Only for:
+- Validating user input (job description)
+- Validating final output (formatted result)
+"""
 
+from guardrails.runner import validate_input, validate_output, GuardrailsValidationError
+
+__all__ = ['validate_input', 'validate_output', 'GuardrailsValidationError']

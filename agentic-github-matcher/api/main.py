@@ -181,7 +181,7 @@ async def process_workflow_stream(
         yield create_chunk("status", "Validating input...", 5)
         
         from app import apply_input_guardrails
-        is_safe, message = apply_input_guardrails(guardrails, job_description)
+        is_safe, message = await apply_input_guardrails(guardrails, job_description)
         if not is_safe:
             yield create_chunk("error", f"Input blocked: {message}")
             return
@@ -317,6 +317,20 @@ async def process_workflow_stream(
             results_dict,
             output_format=output_format
         )
+        
+        # Apply output guardrails to formatted output (after FormatterAgent)
+        if formatted_output:
+            from app import apply_output_guardrails
+            is_safe, validated_output = await apply_output_guardrails(
+                guardrails,
+                formatted_output,
+                context="Formatted job matching report"
+            )
+            if not is_safe:
+                yield create_chunk("error", f"Output validation failed: {validated_output}")
+                return
+            else:
+                formatted_output = validated_output
         
         # Send final result with strategy info
         # For JSON format, formatted_output contains the complete agentic JSON with AI-generated insights
